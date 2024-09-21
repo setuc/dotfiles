@@ -1,0 +1,33 @@
+{
+    "git": {
+        "description": "Distributed version control system",
+        "winget": "Git.Git",
+        "apt": "git",
+        "default": true
+    },
+    "oh-my-posh": {
+        "description": "Prompt theme engine for any shell",
+        "winget": "JanDeDobbeleer.OhMyPosh",
+        "default": true,
+        "apt": "custom",
+        "custom_install": "curl -s https://ohmyposh.dev/install.sh | bash -s -- -d ~/bin"
+    },
+    "python": {
+        "description": "Programming language",
+        "winget": "Python.Python.3",
+        "apt": "python3",
+        "default": true
+    },
+    "7zip": {
+        "description": "File archiver with a high compression ratio",
+        "winget": "7zip.7zip",
+        "apt": "p7zip-full",
+        "default": false
+    },
+    "nodejs": {
+        "description": "JavaScript runtime built on Chrome's V8 JavaScript engine",
+        "winget": "OpenJS.NodeJS",
+        "apt": "nodejs",
+        "default": false
+    }
+}
