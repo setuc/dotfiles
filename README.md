@@ -26,3 +26,5 @@
 git config --global user.name "Setuc"
 git config --global user.email "setuc@noemail.com"
 
+https://github.com/getnf/getnf?ref=linuxtldr.com
+
