@@ -5,9 +5,15 @@ alias venv='python3 -m venv'
 alias activate='source ./venv/bin/activate'
 
 # Conda aliases
-alias coe='conda activate'
+alias coa='conda activate'
 alias cod='conda deactivate'
 alias col='conda env list'
+
+#Azure Conda aliases
+alias coap='conda activate azureml_py310_sdkv2'
+alias codp='conda deactivate azureml_py310_sdkv2'
+alias coatf='conda activate azureml_py38_PT_TF'
+alias codtf='conda deactivate azureml_py38_PT_TF'
 
 # Directory navigation
 alias ..='cd ..'
@@ -23,6 +29,9 @@ alias ga='git add'
 alias gc='git commit'
 alias gp='git push'
 alias gl='git log --oneline --graph --decorate'
+
+# Linux Update aliases
+alias ups='sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y && sudo apt autoclean'
 
 # Vim alias
 alias vi='vim'
