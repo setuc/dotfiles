@@ -22,3 +22,7 @@
     if [ -f ~/.bash_aliases ]; then source ~/.bash_aliases; fi
     for file in $HOME/.bash_completion.d/*; do source $file; done
 
+## Consider adding
+git config --global user.name "Setuc"
+git config --global user.email "setuc@noemail.com"
+
