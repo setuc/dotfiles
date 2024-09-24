@@ -14,6 +14,7 @@ alias coap='conda activate azureml_py310_sdkv2'
 alias codp='conda deactivate azureml_py310_sdkv2'
 alias coatf='conda activate azureml_py38_PT_TF'
 alias codtf='conda deactivate azureml_py38_PT_TF'
+alias coup='conda env update --file environment.yml --prune'
 
 # Directory navigation
 alias ..='cd ..'
@@ -40,14 +41,14 @@ alias vi='vim'
 
 # Function to download, verify hash, and install
 download_verify_install() {
-    if [ "$#" -ne 3 ]; then
-        echo "Usage: download_verify_install <URL> <expected_hash> <install_command>"
+    if [ "$#" -lt 2 ]; then
+        echo "Usage: download_verify_install <URL> <expected_hash> [install_command]"
         return 1
     fi
 
     local url="$1"
     local expected_hash="$2"
-    local install_command="$3"
+    local install_command="${3:-}"
     local filename=$(basename "$url")
 
     # Download the file
@@ -58,11 +59,16 @@ download_verify_install() {
 
     # Compare the hashes
     if [ "$computed_hash" = "$expected_hash" ]; then
-        echo "Hash verification successful. Proceeding with installation."
-        # Execute the install command
-        eval "$install_command"
+        echo -e "\e[32mHash verification successful.\e[0m"
+        if [ -n "$install_command" ]; then
+            echo "Proceeding with installation."
+            # Execute the install command
+            eval "$install_command"
+        else
+            echo "No install command provided. Skipping installation."
+        fi
     else
-        echo "Hash verification failed. Aborting installation."
+        echo -e "\e[31mHash verification failed. Aborting installation.\e[0m"
         echo "Expected hash: $expected_hash"
         echo "Computed hash: $computed_hash"
         # Remove the downloaded file
@@ -73,3 +79,4 @@ download_verify_install() {
 
 # Alias for the download_verify_install function
 alias dvi='download_verify_install'
+
