@@ -141,26 +141,23 @@ create_aml_env() {
     read -p "Enter choice (default: 2 for 3.11): " python_choice
     case $python_choice in
         1) python_version="3.10" ;;
-        3) python_version="3.11" ;;
-        4) python_version="3.12" ;;
+        3) python_version="3.12" ;;
         *) python_version=$default_python_version ;;
     esac
 
     # Create the environment YAML file
     cat > ${env_name}.yml <<EOL
-$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
 name: ${env_name}
-version: 1
-conda_file:
-  channels:
-    - conda-forge
-  dependencies:
-    - python=${python_version}
-    - ipykernel
-    - notebook
-    - pip
-    - pip:
-      - azureml-core
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=${python_version}
+  - ipykernel
+  - notebook
+  - pip
+  - pip:
+    - azureml-core
 EOL
 
     echo "Environment YAML created. Do you want to add additional packages? (y/n)"
@@ -172,7 +169,7 @@ EOL
             if [[ $package == "done" ]]; then
                 break
             fi
-            echo "      - $package" >> ${env_name}.yml
+            echo "  - $package" >> ${env_name}.yml
         done
     fi
 
