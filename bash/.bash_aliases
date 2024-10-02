@@ -122,6 +122,12 @@ alias coenv='create_conda_env'
 # TODO: Seperate out the aliases and the functions into separate file. 
 
 create_aml_env() {
+    # ANSI color codes
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    NC='\033[0m' # No Color
+
     # Default values
     default_python_version="3.11"
     default_env_name="myenv"
@@ -145,45 +151,36 @@ create_aml_env() {
         *) python_version=$default_python_version ;;
     esac
 
-    # Create the environment YAML file
-    cat > ${env_name}.yml <<EOL
-name: ${env_name}
-channels:
-  - conda-forge
-  - defaults
-dependencies:
-  - python=${python_version}
-  - ipykernel
-  - notebook
-  - pip
-  - pip:
-    - azureml-core
-EOL
-
-    echo "Environment YAML created. Do you want to add additional packages? (y/n)"
-    read add_packages
-
-    if [[ $add_packages == "y" ]]; then
-        while true; do
-            read -p "Enter package name (or 'done' to finish): " package
-            if [[ $package == "done" ]]; then
-                break
-            fi
-            echo "  - $package" >> ${env_name}.yml
-        done
+    echo -e "${YELLOW}Creating conda environment...${NC}"
+    conda create -n $env_name python=$python_version ipykernel notebook -y
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Failed to create conda environment. Exiting.${NC}"
+        return 1
     fi
 
-    # Create the environment using conda
-    conda env create -f ${env_name}.yml
+    echo -e "${YELLOW}Activating environment...${NC}"
+    conda activate $env_name
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Failed to activate conda environment. Exiting.${NC}"
+        return 1
+    fi
 
-    # Activate the environment
-    conda activate ${env_name}
+    echo -e "${YELLOW}Installing additional packages...${NC}"
+    conda install -y pip
+    pip install azureml-core
 
-    # Install the IPython kernel
-    python -m ipykernel install --user --name ${env_name} --display-name "${display_name}"
+    echo -e "${YELLOW}Installing IPython kernel...${NC}"
+    python -m ipykernel install --user --name $env_name --display-name "$display_name"
 
-    echo "Environment '${env_name}' created and activated with display name '${display_name}'"
-    echo "Python version: ${python_version}"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Failed to install IPython kernel. Exiting.${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}Environment '$env_name' created and activated with display name '$display_name'${NC}"
+    echo -e "${GREEN}Python version: $python_version${NC}"
 }
 
 alias azml-env='create_aml_env'
