@@ -119,3 +119,74 @@ create_conda_env() {
 
 alias coenv='create_conda_env'
 
+# TODO: Seperate out the aliases and the functions into separate file. 
+
+create_aml_env() {
+    # Default values
+    default_python_version="3.11"
+    default_env_name="myenv"
+    default_display_name="Python Environment"
+
+    # Prompt for key information
+    read -p "Enter environment name (default: $default_env_name): " env_name
+    env_name=${env_name:-$default_env_name}
+
+    read -p "Enter display name (default: $default_display_name): " display_name
+    display_name=${display_name:-$default_display_name}
+
+    echo "Select Python version:"
+    echo "1) 3.10"
+    echo "2) 3.11"
+    echo "3) 3.12"
+    read -p "Enter choice (default: 2 for 3.11): " python_choice
+    case $python_choice in
+        1) python_version="3.10" ;;
+        3) python_version="3.11" ;;
+        4) python_version="3.12" ;;
+        *) python_version=$default_python_version ;;
+    esac
+
+    # Create the environment YAML file
+    cat > ${env_name}.yml <<EOL
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: ${env_name}
+version: 1
+conda_file:
+  channels:
+    - conda-forge
+  dependencies:
+    - python=${python_version}
+    - ipykernel
+    - notebook
+    - pip
+    - pip:
+      - azureml-core
+EOL
+
+    echo "Environment YAML created. Do you want to add additional packages? (y/n)"
+    read add_packages
+
+    if [[ $add_packages == "y" ]]; then
+        while true; do
+            read -p "Enter package name (or 'done' to finish): " package
+            if [[ $package == "done" ]]; then
+                break
+            fi
+            echo "      - $package" >> ${env_name}.yml
+        done
+    fi
+
+    # Create the environment using Azure ML CLI
+    az ml environment create --file ${env_name}.yml
+
+    # Activate the environment
+    conda activate ${env_name}
+
+    # Install the IPython kernel
+    python -m ipykernel install --user --name ${env_name} --display-name "${display_name}"
+
+    echo "Environment '${env_name}' created and activated with display name '${display_name}'"
+    echo "Python version: ${python_version}"
+}
+
+alias azml-env='create_aml_env'
