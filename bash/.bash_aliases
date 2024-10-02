@@ -176,8 +176,8 @@ EOL
         done
     fi
 
-    # Create the environment using Azure ML CLI
-    az ml environment create --file ${env_name}.yml
+    # Create the environment using conda
+    conda env create -f ${env_name}.yml
 
     # Activate the environment
     conda activate ${env_name}
