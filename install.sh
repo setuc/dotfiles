@@ -47,7 +47,7 @@ else
         exit 1  
     fi  
 fi
-  
+
 # Use Stow to symlink configurations  
 echo "Stowing configurations..."  
 stow --verbose --restow --override='.*' --dir="$DOTFILES_DIR" --target="$HOME" bash bin oh-my-posh || {  
@@ -56,6 +56,6 @@ stow --verbose --restow --override='.*' --dir="$DOTFILES_DIR" --target="$HOME" b
 } 
   
 # Source the new .bashrc  
-# source ~/.bashrc  
+source ~/.bashrc  
   
 echo "Dotfiles setup complete!"  
