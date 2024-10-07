@@ -1,0 +1,6 @@
+# ~/.aliases/function_aliases.aliases  
+  
+# Aliases for functions  
+alias dvi='download_verify_install'  
+alias coenv='create_conda_env'  
+alias camlenv='create_aml_env' 
