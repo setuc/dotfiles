@@ -15,13 +15,13 @@ list_storage_accounts() {
     echo -e "${YELLOW}Current Storage Account Settings:${NC}"
     echo -e "${YELLOW}--------------------------------${NC}"
     for rg in $(az group list --query "[].name" -o tsv); do
-        for sa in $(az storage account list --resource-group $rg --query "[].name" -o tsv); do
-            allow_shared_key=$(az storage account show --name $sa --resource-group $rg --query "allowSharedKeyAccess" -o tsv)
+        for sa in $(az storage account list --resource-group "$rg" --query "[].name" -o tsv); do
+            allow_shared_key=$(az storage account show --name "$sa" --resource-group "$rg" --query "allowSharedKeyAccess" -o tsv)
             if [ "$allow_shared_key" = "true" ]; then
-                echo -e "$sa (RG: $rg): Allow storage account key access - ${GREEN}$allow_shared_key${NC}"
+                echo -e "'$sa' (RG: '$rg'): Allow storage account key access - ${GREEN}'$allow_shared_key'${NC}"
                 ((enabled_count++))
             else
-                echo -e "$sa (RG: $rg): Allow storage account key access - ${RED}$allow_shared_key${NC}"
+                echo -e "'$sa' (RG: '$rg'): Allow storage account key access - ${RED}'$allow_shared_key'${NC}"
                 ((disabled_count++))
             fi
             ((total_count++))
@@ -39,14 +39,14 @@ list_storage_accounts() {
 update_storage_account() {
     local sa=$1
     local rg=$2
-    allow_shared_key=$(az storage account show --name $sa --resource-group $rg --query "allowSharedKeyAccess" -o tsv)
+    allow_shared_key=$(az storage account show --name "$sa" --resource-group "$rg" --query "allowSharedKeyAccess" -o tsv)
     if [ "$allow_shared_key" = "false" ]; then
-        echo -e "Enabling storage account key access for ${YELLOW}$sa${NC} in resource group ${YELLOW}$rg${NC}"
-        az storage account update --name $sa --resource-group $rg --allow-shared-key-access true
-        echo -e "${GREEN}Storage account key access has been enabled for $sa${NC}"
+        echo -e "Enabling storage account key access for ${YELLOW}'$sa'${NC} in resource group ${YELLOW}'$rg$'{NC}"
+        az storage account update --name "$sa" --resource-group "$rg" --allow-shared-key-access true
+        echo -e "${GREEN}Storage account key access has been enabled for '$sa'${NC}"
         return 0
     else
-        echo -e "${YELLOW}$sa${NC} already has storage account key access enabled. Skipping."
+        echo -e "${YELLOW}'$sa'${NC} already has storage account key access enabled. Skipping."
         return 1
     fi
 }
@@ -57,14 +57,14 @@ update_all_storage_accounts() {
     local total_count=0
     echo -e "${YELLOW}Updating all disabled storage accounts...${NC}"
     for rg in $(az group list --query "[].name" -o tsv); do
-        for sa in $(az storage account list --resource-group $rg --query "[].name" -o tsv); do
+        for sa in $(az storage account list --resource-group "$rg" --query "[].name" -o tsv); do
             ((total_count++))
-            if update_storage_account $sa $rg; then
+            if update_storage_account "$sa" "$rg"; then
                 ((updated_count++))
             fi
         done
     done
-    echo -e "${GREEN}Updated $updated_count out of $total_count storage accounts.${NC}"
+    echo -e "${GREEN}Updated '$updated_count' out of' $total_count' storage accounts.${NC}"
 }
 
 # List all storage accounts
@@ -73,7 +73,7 @@ list_storage_accounts
 # Main loop for user interaction
 while true; do
     echo -e "${YELLOW}Enter the name of a storage account to update, 'all' to update all disabled accounts, or 'q' to quit:${NC}"
-    read input
+    read -r input
     if [ "$input" = "q" ]; then
         break
     elif [ "$input" = "all" ]; then
@@ -82,9 +82,9 @@ while true; do
         # Find the resource group for the given storage account
         rg=$(az storage account list --query "[?name=='$input'].resourceGroup" -o tsv)
         if [ -z "$rg" ]; then
-            echo -e "${RED}Storage account $input not found. Please try again.${NC}"
+            echo -e "${RED}Storage account '$input' not found. Please try again.${NC}"
         else
-            update_storage_account $input $rg
+            update_storage_account "$input" "$rg"
         fi
     fi
     echo ""
