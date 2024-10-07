@@ -1,0 +1,12 @@
+# Azure CLI aliases  
+alias azlogin='az login'  
+alias azrg='az group list -o table'  
+alias azvm='az vm list -d -o table'  
+alias azaks='az aks list -o table' '
+
+#Azure Machine Learing Conda aliases
+alias coap='conda activate azureml_py310_sdkv2'
+alias codp='conda deactivate azureml_py310_sdkv2'
+alias coatf='conda activate azureml_py38_PT_TF'
+alias codtf='conda deactivate azureml_py38_PT_TF'
+alias coup='conda env update --file environment.yml --prune'

@@ -1,0 +1,7 @@
+# ~/.bash_prompt  
+  
+# Custom PS1 prompt  
+# If using oh-my-posh, this file can be minimal or empty  
+# Uncomment below to customize prompt without oh-my-posh  
+  
+# PS1='\[\e[0;32m\]\u@\h \[\e[0;33m\]\w\[\e[0m\] \$ '  

@@ -1,0 +1,23 @@
+# General aliases  
+alias ll='ls -alF'  
+alias la='ls -A'  
+alias l='ls -CF'  
+alias ..='cd ..'  
+alias ...='cd ../..'  
+alias grep='grep --color=auto'  
+
+# Custom aliases  
+alias myip='curl ifconfig.me'  
+alias ups='sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y && sudo apt autoclean'
+
+ 
+# Editing aliases  
+alias v='vim'  
+alias vimrc='vim ~/.vimrc'  
+alias bashrc='vim ~/.bashrc' 
+
+# Python aliases  
+alias py='python3'
+alias pip='pip3'
+alias venv='python3 -m venv'
+alias activate='source ./venv/bin/activate'

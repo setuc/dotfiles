@@ -1,0 +1,31 @@
+# ~/.bash_exports  
+  
+# Add local bin to PATH  
+export PATH="$HOME/bin:$HOME/.local/bin:$PATH"  
+  
+# Set up custom environment variables  
+export EDITOR='vim'  
+export VISUAL='vim'  
+  
+# Python virtual environments  
+export WORKON_HOME=$HOME/.virtualenvs  
+export PROJECT_HOME=$HOME/Devel  
+source /usr/local/bin/virtualenvwrapper.sh  
+  
+# Azure settings  
+export AZURE_DEFAULT_LOCATION='eastus'  
+
+# NVM (Node Version Manager) Initialization  
+export NVM_DIR="$HOME/.nvm"  
+# This loads nvm  
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  
+# This loads nvm bash_completion  
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  
+  
+# Add Neovim to PATH  
+export PATH="/opt/nvim-appimage/usr/bin:$PATH"  
+  
+# Initialize Cargo environment (Rust)  
+if [ -f "$HOME/.cargo/env" ]; then  
+    . "$HOME/.cargo/env"  
+fi  
