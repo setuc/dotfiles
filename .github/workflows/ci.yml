@@ -90,8 +90,9 @@ jobs:
           fi
 
       - name: Source Bash configuration and test aliases
-        shell: bash -l {0}
+        shell: bash -l -i {0}
         run: |
+          source ~/.bashrc  
           # Test general aliases
           type ll
           type l
