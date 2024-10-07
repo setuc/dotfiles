@@ -39,16 +39,14 @@ jobs:
         uses: azure/CLI@v1
         with:
           azcliversion: latest
+          inlineScript: |
+            az account show
+            az group list
 
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-    
-      - name: Run Azure CLI commands
-        run: |
-            az --version
-            az account show
 
       - name: Install dotfiles
         run: |
