@@ -25,7 +25,7 @@ if [ -d ".git" ]; then
     DOTFILES_DIR="$(pwd)"  
 else  
     # Cloning the repository (local environment)  
-    DOTFILES_DIR="/tmp/dotfiles"  
+    DOTFILES_DIR="$HOME/dotfiles"  
     if [ ! -d "$DOTFILES_DIR/.git" ]; then  
         echo "Cloning dotfiles repository..."  
         git clone https://github.com/setuc/dotfiles.git "$DOTFILES_DIR"  
@@ -33,14 +33,29 @@ else
     cd "$DOTFILES_DIR" || exit  
 fi  
   
+# Remove existing conflicting files in the home directory  
+if [ "$CI" = "true" ]; then  
+    # Remove existing conflicting files in the home directory  
+    rm -f "$HOME/.bashrc" "$HOME/.bash_aliases" "$HOME/.bash_exports" "$HOME/.bash_functions" "$HOME/.bash_prompt"  
+else  
+    echo "This script will remove your existing configuration files and replace them with symlinks."  
+    read -rp "Are you sure you want to proceed? [y/N]: " response  
+    if [[ "$response" =~ ^[Yy]$ ]]; then  
+        rm -f "$HOME/.bashrc" "$HOME/.bash_aliases" "$HOME/.bash_exports" "$HOME/.bash_functions" "$HOME/.bash_prompt"  
+    else  
+        echo "Aborting."  
+        exit 1  
+    fi  
+fi
+  
 # Use Stow to symlink configurations  
 echo "Stowing configurations..."  
-stow --verbose --restow --dir="$DOTFILES_DIR" --target="$HOME" --stow bash bin oh-my-posh || {  
+stow --verbose --restow --override='.*' --dir="$DOTFILES_DIR" --target="$HOME" bash bin oh-my-posh || {  
     echo "Failed to stow configurations"  
     exit 1  
 } 
   
 # Source the new .bashrc  
-source ~/.bashrc  
+# source ~/.bashrc  
   
 echo "Dotfiles setup complete!"  
