@@ -1,4 +1,13 @@
 #!/bin/bash
+DRY_RUN=false  
+
+while [[ "$#" -gt 0 ]]; do  
+    case $1 in  
+        --dry-run) DRY_RUN=true ;;  
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;  
+    esac  
+    shift  
+done  
 
 # Define the regions and VM series as arrays
 regions=("southeastasia" "westeurope" "australiaeast")
@@ -45,33 +54,39 @@ create_spot_vm() {
         --generate-ssh-keys
 }
 
-echo "Select a region:"
-select region in "${regions[@]}"; do
-    case $region in
-        "southeastasia"|"westeurope"|"australiaeast")
-            break
-            ;;
-        *)
-            echo "Invalid option. Please select a valid region."
-            ;;
-    esac
-done
+# Then, wrap actions with checks for DRY_RUN  
+if [ "$CI" = "true" ] || [ "$DRY_RUN" = true ]; then  
+    echo "DRY RUN: Would perform spot price check."  
+else  
+    echo "Non CI Instance, Proceeding regularly"
+    echo "Select a region:"
+    select region in "${regions[@]}"; do
+        case $region in
+            "southeastasia"|"westeurope"|"australiaeast")
+                break
+                ;;
+            *)
+                echo "Invalid option. Please select a valid region."
+                ;;
+        esac
+    done
 
-echo "Select a VM series:"
-select series in "${vm_series[@]}"; do
-    case $series in
-        "Standard_D"|"Standard_E"|"Standard_NC"|"Standard_NV")
-            fetch_vm_prices "$region" "$series"
-            break
-            ;;
-        *)
-            echo "Invalid option. Please select a valid VM series."
-            ;;
-    esac
-done
+    echo "Select a VM series:"
+    select series in "${vm_series[@]}"; do
+        case $series in
+            "Standard_D"|"Standard_E"|"Standard_NC"|"Standard_NV")
+                fetch_vm_prices "$region" "$series"
+                break
+                ;;
+            *)
+                echo "Invalid option. Please select a valid VM series."
+                ;;
+        esac
+    done
 
-# Prompt user for the VM name
-read -r -p "Enter the name for the new spot VM: " vm_name
+    # Prompt user for the VM name
+    read -r -p "Enter the name for the new spot VM: " vm_name
 
-# Create the spot VM
-create_spot_vm "$region" "$series" "$vm_name"
+    # Create the spot VM
+    create_spot_vm "$region" "$series" "$vm_name"
+fi

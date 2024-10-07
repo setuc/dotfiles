@@ -117,4 +117,3 @@ jobs:
           chmod +x bin/create_azure_resources.sh
           bash bin/enable_storage_key.sh --dry-run || true
           bash bin/checkspotprice.sh --dry-run || true
-          bash bin/create_azure_resources.sh --dry-run || true

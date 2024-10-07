@@ -6,6 +6,17 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Initialize dry run mode to false  
+DRY_RUN=false  
+# Parse command-line arguments  
+while [[ "$#" -gt 0 ]]; do  
+    case $1 in  
+        --dry-run) DRY_RUN=true ;;  
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;  
+    esac  
+    shift  
+done 
+
 # Function to list storage accounts and their settings
 list_storage_accounts() {
     local total_count=0
@@ -35,21 +46,26 @@ list_storage_accounts() {
     echo ""
 }
 
-# Function to update a single storage account
-update_storage_account() {
-    local sa=$1
-    local rg=$2
-    allow_shared_key=$(az storage account show --name "$sa" --resource-group "$rg" --query "allowSharedKeyAccess" -o tsv)
-    if [ "$allow_shared_key" = "false" ]; then
-        echo -e "Enabling storage account key access for ${YELLOW}'$sa'${NC} in resource group ${YELLOW}'$rg$'{NC}"
-        az storage account update --name "$sa" --resource-group "$rg" --allow-shared-key-access true
-        echo -e "${GREEN}Storage account key access has been enabled for '$sa'${NC}"
-        return 0
-    else
-        echo -e "${YELLOW}'$sa'${NC} already has storage account key access enabled. Skipping."
-        return 1
-    fi
-}
+# Function to update a single storage account  
+update_storage_account() {  
+    local sa=$1  
+    local rg=$2  
+    allow_shared_key=$(az storage account show --name "$sa" --resource-group "$rg" --query "allowSharedKeyAccess" -o tsv)  
+    if [ "$allow_shared_key" = "false" ]; then  
+        echo -e "Enabling storage account key access for ${YELLOW}'$sa'${NC} in resource group ${YELLOW}'$rg'${NC}"  
+        if [ "$DRY_RUN" = true ]; then  
+            echo "DRY RUN: Would execute: az storage account update --name \"$sa\" --resource-group \"$rg\" --allow-shared-key-access true"  
+            echo -e "${GREEN}DRY RUN: Storage account key access would be enabled for '$sa'${NC}"  
+        else  
+            az storage account update --name "$sa" --resource-group "$rg" --allow-shared-key-access true  
+            echo -e "${GREEN}Storage account key access has been enabled for '$sa'${NC}"  
+        fi  
+        return 0  
+    else  
+        echo -e "${YELLOW}'$sa'${NC} already has storage account key access enabled. Skipping."  
+        return 1  
+    fi  
+} 
 
 # Function to update all disabled storage accounts
 update_all_storage_accounts() {
@@ -71,24 +87,30 @@ update_all_storage_accounts() {
 list_storage_accounts
 
 # Main loop for user interaction
-while true; do
-    echo -e "${YELLOW}Enter the name of a storage account to update, 'all' to update all disabled accounts, or 'q' to quit:${NC}"
-    read -r input
-    if [ "$input" = "q" ]; then
-        break
-    elif [ "$input" = "all" ]; then
-        update_all_storage_accounts
-    else
-        # Find the resource group for the given storage account
-        rg=$(az storage account list --query "[?name=='$input'].resourceGroup" -o tsv)
-        if [ -z "$rg" ]; then
-            echo -e "${RED}Storage account '$input' not found. Please try again.${NC}"
+if [ "$CI" = "true" ] || [ "$DRY_RUN" = true ]; then  
+    echo "Non-interactive mode detected. Proceeding without user interaction."  
+    echo "skipping all steps for now"
+else 
+    while true; do
+        echo -e "${YELLOW}Enter the name of a storage account to update, 'all' to update all disabled accounts, or 'q' to quit:${NC}"
+        read -r input
+        if [ "$input" = "q" ]; then
+            break
+        elif [ "$input" = "all" ]; then
+            update_all_storage_accounts
         else
-            update_storage_account "$input" "$rg"
+            # Find the resource group for the given storage account
+            rg=$(az storage account list --query "[?name=='$input'].resourceGroup" -o tsv)
+            if [ -z "$rg" ]; then
+                echo -e "${RED}Storage account '$input' not found. Please try again.${NC}"
+            else
+                update_storage_account "$input" "$rg"
+            fi
         fi
-    fi
-    echo ""
-done
+        echo ""
+    done
 
-echo "Exiting. Here's the final state of your storage accounts:"
-list_storage_accounts
+    echo "Exiting. Here's the final state of your storage accounts:"
+    list_storage_accounts
+
+fi
