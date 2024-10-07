@@ -19,7 +19,7 @@ confirm() {
     else  
         prompt="$prompt [y/N]: "  
     fi  
-    read -p "$prompt" choice  
+    read -r -p "$prompt" choice  
     choice=${choice:-$default}  
     case "$choice" in  
         y|Y ) return 0 ;;  
@@ -96,14 +96,14 @@ select_region() {
 # Function to create resource group name  
 create_resource_group_name() {  
     echo -e "${BLUE}Let's construct a resource group name.${NC}"  
-    read -p "Enter the customer code (e.g., cli, int, exp) [Default: int]: " CUSTOMER_CODE  
+    read -r -p "Enter the customer code (e.g., cli, int, exp) [Default: int]: " CUSTOMER_CODE  
     CUSTOMER_CODE=${CUSTOMER_CODE:-int}  
-    read -p "Enter the project or purpose (use two descriptive words, e.g., search experiments): " PURPOSE_WORDS  
+    read -r -p "Enter the project or purpose (use two descriptive words, e.g., search experiments): " PURPOSE_WORDS  
     while [[ -z "$PURPOSE_WORDS" ]]; do  
         echo -e "${RED}Purpose cannot be empty.${NC}"  
-        read -p "Enter the project or purpose (use two descriptive words): " PURPOSE_WORDS  
+        read -r -p "Enter the project or purpose (use two descriptive words): " PURPOSE_WORDS  
     done  
-    read -p "Enter an identifier (e.g., date, timestamp) [Default: $(date +%Y%m%d)]: " IDENTIFIER  
+    read -r -p "Enter an identifier (e.g., date, timestamp) [Default: $(date +%Y%m%d)]: " IDENTIFIER  
     IDENTIFIER=${IDENTIFIER:-$(date +%Y%m%d)}  
   
     # Construct the resource group name  
@@ -117,7 +117,7 @@ create_resource_group_name() {
     if confirm "Do you want to use this resource group name?" "Y"; then  
         echo -e "${GREEN}Resource group name set to: $RG_NAME${NC}"  
     else  
-        read -p "Enter your preferred resource group name: " RG_NAME  
+        read -r -p "Enter your preferred resource group name: " RG_NAME  
         RG_NAME=$(echo "$RG_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')  
         echo -e "${GREEN}Resource group name set to: $RG_NAME${NC}"  
     fi  
@@ -130,7 +130,7 @@ create_storage_account() {
         echo -e "${YELLOW}Storage account $name already exists.${NC}"  
     else  
         echo -e "${BLUE}Creating storage account $name...${NC}"  
-        az storage account create -g "$RG_NAME" -n "$name" --sku Standard_LRS --kind StorageV2 --location "$REGION" --tags $TAGS  
+        az storage account create -g "$RG_NAME" -n "$name" --sku Standard_LRS --kind StorageV2 --location "$REGION" --tags "$TAGS" 
     fi  
 }  
   
@@ -141,7 +141,7 @@ create_key_vault() {
         echo -e "${YELLOW}Key Vault $name already exists.${NC}"  
     else  
         echo -e "${BLUE}Creating Key Vault $name...${NC}"  
-        az keyvault create -g "$RG_NAME" -n "$name" --location "$REGION" --sku standard --tags $TAGS  
+        az keyvault create -g "$RG_NAME" -n "$name" --location "$REGION" --sku standard --tags "$TAGS"  
     fi  
   
     # Set access policies  
@@ -169,7 +169,7 @@ create_app_insights() {
              --resource-group "$RG_NAME" \
              --workspace-name "$workspace_name" \
              --location "$REGION" \
-             --tags $TAGS
+             --tags "$TAGS"
 
         # Create Application Insights with Workspace mode
         az monitor app-insights component create \
@@ -179,13 +179,18 @@ create_app_insights() {
             --kind "web" \
             --application-type "web" \
             --workspace "$workspace_name" \
-            --tags $TAGS
+            --tags "$TAGS"
     fi
 }  
   
 # Function to create Azure Machine Learning Workspace
 create_ml_workspace() {
     local name="$1"
+
+    #Define Local variables
+    local storage_id
+    local keyvault_id
+    local appinsights_id
 
     # Azure Machine Learning requires storage account, keyvault, and app insights
     create_storage_account "$STORAGE_NAME"
@@ -202,9 +207,9 @@ create_ml_workspace() {
     else
         echo -e "${BLUE}Creating Machine Learning workspace $name...${NC}"
         # Get full ARM IDs
-        local storage_id=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG_NAME" --query id -o tsv)
-        local keyvault_id=$(az keyvault show --name "$KEYVAULT_NAME" --resource-group "$RG_NAME" --query id -o tsv)
-        local appinsights_id=$(az monitor app-insights component show --app "$APPINSIGHTS_NAME" --resource-group "$RG_NAME" --query id -o tsv)
+        storage_id=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG_NAME" --query id -o tsv)
+        keyvault_id=$(az keyvault show --name "$KEYVAULT_NAME" --resource-group "$RG_NAME" --query id -o tsv)
+        appinsights_id=$(az monitor app-insights component show --app "$APPINSIGHTS_NAME" --resource-group "$RG_NAME" --query id -o tsv)
 
         az ml workspace create \
             --resource-group "$RG_NAME" \
@@ -213,7 +218,7 @@ create_ml_workspace() {
             --storage-account "$storage_id" \
             --key-vault "$keyvault_id" \
             --application-insights "$appinsights_id" \
-            --tags $TAGS
+            --tags "$TAGS"
     fi
 
     # Check if compute exists
@@ -239,7 +244,7 @@ create_cognitive_service() {
         echo -e "${YELLOW}Cognitive Service $name ($kind) already exists.${NC}"  
     else  
         echo -e "${BLUE}Creating Cognitive Service $name ($kind)...${NC}"  
-        az cognitiveservices account create -g "$RG_NAME" -n "$name" --kind "$kind" --sku "$sku" --location "$REGION" --tags $TAGS --yes  
+        az cognitiveservices account create -g "$RG_NAME" -n "$name" --kind "$kind" --sku "$sku" --location "$REGION" --tags "$TAGS" --yes  
     fi  
 }  
 
@@ -256,11 +261,14 @@ create_openai_model_deployments() {
     fi
 
     # Get available models, their versions, and SKUs
-    local available_models=$(az cognitiveservices model list --location "$REGION" --query "[].{name:model.name, version:model.version, sku:model.skus[0].name}" -o tsv)
+    local available_models
+    available_models=$(az cognitiveservices model list --location "$REGION" --query "[].{name:model.name, version:model.version, sku:model.skus[0].name}" -o tsv)
 
     # Loop through desired models and create deployments
     while IFS=$'\t' read -r model version sku; do
-        if [[ " ${desired_models[@]} " =~ " ${model} " ]]; then
+        # if [[ " ${desired_models[@]} " =~ " ${model} " ]]; then
+        # shell check recommended fix
+        if [[ " ${desired_models[*]} " == *" ${model} "* ]]; then  
             local deployment_name="${model//./-}-deployment"
             if az cognitiveservices account deployment show --name "$account_name" --resource-group "$RG_NAME" --deployment-name "$deployment_name" &>/dev/null; then
                 echo -e "${YELLOW}Deployment $deployment_name for model $model already exists.${NC}"
@@ -291,7 +299,7 @@ create_search_service() {
         echo -e "${YELLOW}Azure Search Service $name already exists.${NC}"  
     else  
         echo -e "${BLUE}Creating Azure Search Service $name...${NC}"  
-        az search service create -g "$RG_NAME" -n "$name" --sku Basic --location "$REGION" --tags $TAGS  
+        az search service create -g "$RG_NAME" -n "$name" --sku Basic --location "$REGION" --tags "$TAGS"  
     fi  
 }  
   
@@ -314,7 +322,7 @@ echo "Current user UPN: $CURRENT_USER_ALIAS"
 select_region  
   
 # Prompt for resource group  
-read -p "Enter the resource group name (leave blank to create a new one): " RG_NAME_INPUT  
+read -r -p "Enter the resource group name (leave blank to create a new one): " RG_NAME_INPUT  
 if [[ -z "$RG_NAME_INPUT" ]]; then  
     # Create resource group name  
     create_resource_group_name  
@@ -325,7 +333,7 @@ else
 fi 
   
 # Set default owner to current user  
-read -p "Enter owner name [Default: $CURRENT_USER_ALIAS]: " OWNER  
+read -r -p "Enter owner name [Default: $CURRENT_USER_ALIAS]: " OWNER  
 OWNER=${OWNER:-$CURRENT_USER_ALIAS}  
   
 # Validate OWNER input and check if user exists in Azure AD  
@@ -334,7 +342,7 @@ if [[ -z "$OWNER_UPN" ]]; then
     echo -e "${YELLOW}User $OWNER not found in Azure AD.${NC}"  
     # Ask to enter a valid UPN  
     while [[ -z "$OWNER_UPN" ]]; do  
-        read -p "Please enter a valid UPN for the owner: " OWNER  
+        read -r -p "Please enter a valid UPN for the owner: " OWNER  
         OWNER_UPN=$(az ad user list --filter "startswith(userPrincipalName,'$OWNER')" --query "[0].userPrincipalName" -o tsv)  
         if [[ -z "$OWNER_UPN" ]]; then  
             echo -e "${YELLOW}User $OWNER not found in Azure AD.${NC}"  
@@ -347,13 +355,13 @@ echo -e "${GREEN}Owner UPN verified: $OWNER_UPN${NC}"
   
 # Calculate default deleteAfter date (default to 30 days from today)  
 DEFAULT_DELETE_AFTER=$(date -d "+30 days" +%Y-%m-%d 2>/dev/null || date -v+30d +%Y-%m-%d)  
-read -p "Enter delete after date (YYYY-MM-DD) [Default: $DEFAULT_DELETE_AFTER]: " DELETE_AFTER  
+read -r -p "Enter delete after date (YYYY-MM-DD) [Default: $DEFAULT_DELETE_AFTER]: " DELETE_AFTER  
 DELETE_AFTER=${DELETE_AFTER:-$DEFAULT_DELETE_AFTER}  
   
-read -p "Enter purpose: " PURPOSE  
+read -r -p "Enter purpose: " PURPOSE  
   
 # Prompt for isProduction tag with default value  
-read -p "Is this a production environment? (yes/no) [Default: no]: " IS_PRODUCTION  
+read -r -p "Is this a production environment? (yes/no) [Default: no]: " IS_PRODUCTION  
 IS_PRODUCTION=${IS_PRODUCTION:-no}  
 IS_PRODUCTION=$(echo "$IS_PRODUCTION" | tr '[:upper:]' '[:lower:]')  
   
@@ -380,7 +388,7 @@ else
 fi  
 
 # Optional: Prompt for a naming prefix for resources  
-read -p "Enter a naming prefix for resources [Default: $RG_NAME]: " NAME_PREFIX  
+read -r -p "Enter a naming prefix for resources [Default: $RG_NAME]: " NAME_PREFIX  
 NAME_PREFIX=${NAME_PREFIX:-$RG_NAME}  
 NAME_PREFIX=$(echo "$NAME_PREFIX" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')  
   

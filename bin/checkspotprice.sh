@@ -35,12 +35,12 @@ create_spot_vm() {
     # Create the VM with Azure CLI
     az vm create \
         --resource-group myResourceGroup \
-        --name $vm_name \
-        --location $region \
+        --name "$vm_name" \
+        --location "$region" \
         --image UbuntuLTS \
-        --size $series \
+        --size "$series" \
         --priority Spot \
-        --max-price $max_price \
+        --max-price "$max_price" \
         --eviction-policy Deallocate \
         --generate-ssh-keys
 }
@@ -61,7 +61,7 @@ echo "Select a VM series:"
 select series in "${vm_series[@]}"; do
     case $series in
         "Standard_D"|"Standard_E"|"Standard_NC"|"Standard_NV")
-            fetch_vm_prices $region $series
+            fetch_vm_prices "$region" "$series"
             break
             ;;
         *)
@@ -71,8 +71,7 @@ select series in "${vm_series[@]}"; do
 done
 
 # Prompt user for the VM name
-read -p "Enter the name for the new spot VM: " vm_name
+read -r -p "Enter the name for the new spot VM: " vm_name
 
 # Create the spot VM
-create_spot_vm $region $series $vm_name
-
+create_spot_vm "$region" "$series" "$vm_name"
