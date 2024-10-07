@@ -30,9 +30,9 @@ cd "$DOTFILES_DIR" || exit
   
 # Use Stow to symlink configurations  
 echo "Stowing configurations..."  
-stow -v -R -t ~ bash  
-stow -v -R -t ~ bin  
-stow -v -R -t ~ oh-my-posh  
+stow -v -R -t ~ bash || { echo "Failed to stow bash"; exit 1; }  
+stow -v -R -t ~ bin || { echo "Failed to stow bin"; exit 1; }  
+stow -v -R -t ~ oh-my-posh || { echo "Failed to stow oh-my-posh"; exit 1; }  
   
 # Source the new .bashrc  
 source ~/.bashrc  

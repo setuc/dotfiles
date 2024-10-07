@@ -52,6 +52,22 @@ jobs:
         run: |
           chmod +x install.sh setup_linux.sh
           ./install.sh
+          echo "Contents of the home directory after running install.sh:"  
+          ls -la ~
+          
+      - name: Verify symlinks  
+        run: |  
+            set -e  
+            files=(~/.bashrc ~/.bash_aliases ~/.bash_exports ~/.bash_functions ~/.bash_prompt)  
+            for file in "${files[@]}"; do  
+                if [ -L "$file" ]; then  
+                echo "$file is a symlink."  
+                else  
+                echo "::error::$file is not a symlink."  
+                ls -la "$file" || echo "$file does not exist."  
+                exit 1  
+                fi  
+            done  
 
       - name: Run shellcheck on scripts
         run: |
