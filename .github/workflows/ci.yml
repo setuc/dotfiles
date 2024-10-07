@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 0 1-7 * 1'  # Run on the first Monday of every month at 00:00 UTC
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  build-and-test:
+    if: github.event_name == 'push' || 
+        (github.event_name == 'pull_request' && github.event.pull_request.merged == true) || 
+        github.event_name == 'schedule' || 
+        github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-20.04, ubuntu-22.04]
+        python-version: ['3.10', '3.11', '3.12']
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y stow git shellcheck jq
+
+      - name: Install Azure CLI
+        uses: azure/CLI@v1
+        with:
+          azcliversion: latest
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+      - name: Run Azure CLI commands
+        run: |
+            az --version
+            az account show
+
+      - name: Install dotfiles
+        run: |
+          chmod +x install.sh setup_linux.sh
+          ./install.sh
+
+      - name: Run shellcheck on scripts
+        run: |
+          shellcheck **/*.sh
+
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+        
+      - name: Install Python dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install requests tabulate
+          fi
+
+      - name: Verify symlinks
+        run: |
+          test -L ~/.bashrc
+          test -L ~/.bash_aliases
+          test -L ~/.bash_exports
+          test -L ~/.bash_functions
+          test -L ~/.bash_prompt
+
+      - name: Source Bash configuration and test aliases
+        shell: bash -l {0}
+        run: |
+          # Test general aliases
+          type ll
+          type l
+          type la
+          # Test Git aliases
+          type gs
+          type ga
+          type gp
+          # Test Docker aliases
+          type dps
+          type di
+
+      - name: Run Python script tests
+        run: |
+          python3 bin/checkPrices.py
+          python3 bin/checkPrices2.py
+
+      - name: Test shell scripts in bin/
+        run: |
+          chmod +x bin/enable_storage_key.sh
+          chmod +x bin/checkspotprice.sh
+          chmod +x bin/create_azure_resources.sh
+          bash bin/enable_storage_key.sh --dry-run || true
+          bash bin/checkspotprice.sh --dry-run || true
+          bash bin/create_azure_resources.sh --dry-run || true
