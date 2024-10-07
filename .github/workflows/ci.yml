@@ -54,7 +54,7 @@ jobs:
           ./install.sh
           echo "Contents of the home directory after running install.sh:"  
           ls -la ~
-          
+
       - name: Verify symlinks  
         run: |  
             set -e  
@@ -88,14 +88,6 @@ jobs:
           else
             pip install requests tabulate
           fi
-
-      - name: Verify symlinks
-        run: |
-          test -L ~/.bashrc
-          test -L ~/.bash_aliases
-          test -L ~/.bash_exports
-          test -L ~/.bash_functions
-          test -L ~/.bash_prompt
 
       - name: Source Bash configuration and test aliases
         shell: bash -l {0}
