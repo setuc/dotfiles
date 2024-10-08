@@ -1,16 +1,18 @@
 #!/bin/bash  
-set -e  
-set -u  
   
 # Function to generate .env file  
 generate_env_file() {  
+    set -e  
+    set -u  
+  
     # Initialize dry run to false  
     dry_run=false  
   
     # Check for 'dry run' parameter  
-    if [[ "${1:-}" == "dry run" ]]; then  
+    if [[ "${1:-}" == "dry run" || "${2:-}" == "dry run" ]]; then  
         dry_run=true  
-        shift  
+        # Remove 'dry run' from arguments  
+        set -- "${@/dry run}"  
     fi  
   
     # Prompt for resource group if not provided  
@@ -133,37 +135,37 @@ generate_env_file() {
     done  
   
     if [ "$dry_run" = true ]; then  
-        echo -e "\nDry run enabled. The following .env file would be created:"  
-        cat << EOF  
-AZURE_SEARCH_SERVICE_ENDPOINT=$search_endpoint  
-AZURE_SEARCH_INDEX=$search_index  
-AZURE_SEARCH_DATASOURCE=$search_datasource  
-AZURE_SEARCH_SKILLSET=$search_skillset  
-AZURE_SEARCH_INDEXER=$search_indexer  
-AZURE_OPENAI_ENDPOINT=$openai_endpoint  
-AZURE_OPENAI_EMBEDDING_DEPLOYMENT_ID=$azure_openai_embedding_deployment_id  
-AZURE_BLOB_CONTAINER=$blob_container  
-AZURE_BLOB_CONNECTION_STRING=$blob_connection_string  
-AZURE_BLOB_ACCOUNT_URL=$blob_account_url  
-AZURE_SEARCH_ADMIN_KEY=$search_key  
-AZURE_OPENAI_KEY=$openai_key  
-EOF  
+        echo -e "\nDry run enabled. The following .env file would be created:\n"  
+        {  
+            printf "AZURE_SEARCH_SERVICE_ENDPOINT=%s\n" "$search_endpoint"  
+            printf "AZURE_SEARCH_INDEX=%s\n" "$search_index"  
+            printf "AZURE_SEARCH_DATASOURCE=%s\n" "$search_datasource"  
+            printf "AZURE_SEARCH_SKILLSET=%s\n" "$search_skillset"  
+            printf "AZURE_SEARCH_INDEXER=%s\n" "$search_indexer"  
+            printf "AZURE_OPENAI_ENDPOINT=%s\n" "$openai_endpoint"  
+            printf "AZURE_OPENAI_EMBEDDING_DEPLOYMENT_ID=%s\n" "$azure_openai_embedding_deployment_id"  
+            printf "AZURE_BLOB_CONTAINER=%s\n" "$blob_container"  
+            printf "AZURE_BLOB_CONNECTION_STRING=%s\n" "$blob_connection_string"  
+            printf "AZURE_BLOB_ACCOUNT_URL=%s\n" "$blob_account_url"  
+            printf "AZURE_SEARCH_ADMIN_KEY=%s\n" "$search_key"  
+            printf "AZURE_OPENAI_KEY=%s\n" "$openai_key"  
+        }  
     else  
         # Create .env file  
-        cat << EOF > .env  
-AZURE_SEARCH_SERVICE_ENDPOINT=$search_endpoint  
-AZURE_SEARCH_INDEX=$search_index  
-AZURE_SEARCH_DATASOURCE=$search_datasource  
-AZURE_SEARCH_SKILLSET=$search_skillset  
-AZURE_SEARCH_INDEXER=$search_indexer  
-AZURE_OPENAI_ENDPOINT=$openai_endpoint  
-AZURE_OPENAI_EMBEDDING_DEPLOYMENT_ID=$azure_openai_embedding_deployment_id  
-AZURE_BLOB_CONTAINER=$blob_container  
-AZURE_BLOB_CONNECTION_STRING=$blob_connection_string  
-AZURE_BLOB_ACCOUNT_URL=$blob_account_url  
-AZURE_SEARCH_ADMIN_KEY=$search_key  
-AZURE_OPENAI_KEY=$openai_key  
-EOF  
+        {  
+            printf "AZURE_SEARCH_SERVICE_ENDPOINT=%s\n" "$search_endpoint"  
+            printf "AZURE_SEARCH_INDEX=%s\n" "$search_index"  
+            printf "AZURE_SEARCH_DATASOURCE=%s\n" "$search_datasource"  
+            printf "AZURE_SEARCH_SKILLSET=%s\n" "$search_skillset"  
+            printf "AZURE_SEARCH_INDEXER=%s\n" "$search_indexer"  
+            printf "AZURE_OPENAI_ENDPOINT=%s\n" "$openai_endpoint"  
+            printf "AZURE_OPENAI_EMBEDDING_DEPLOYMENT_ID=%s\n" "$azure_openai_embedding_deployment_id"  
+            printf "AZURE_BLOB_CONTAINER=%s\n" "$blob_container"  
+            printf "AZURE_BLOB_CONNECTION_STRING=%s\n" "$blob_connection_string"  
+            printf "AZURE_BLOB_ACCOUNT_URL=%s\n" "$blob_account_url"  
+            printf "AZURE_SEARCH_ADMIN_KEY=%s\n" "$search_key"  
+            printf "AZURE_OPENAI_KEY=%s\n" "$openai_key"  
+        } > .env  
   
         # Secure the .env file  
         chmod 600 .env  
