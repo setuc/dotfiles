@@ -11,3 +11,6 @@ alias codp='conda deactivate azureml_py310_sdkv2'
 alias coatf='conda activate azureml_py38_PT_TF'
 alias codtf='conda deactivate azureml_py38_PT_TF'
 alias coup='conda env update --file environment.yml --prune'
+
+# Azure default working directory
+alias wd='cd /home/azureuser/cloudfiles/code/Users/setuchokshi/'
