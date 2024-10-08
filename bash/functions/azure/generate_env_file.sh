@@ -181,12 +181,4 @@ EOF
         echo "Sensitive data is stored in .env (permissions set to 600)."  
         echo "Ensure '.env' is added to your .gitignore to prevent accidental commits."  
     fi  
-}  
-  
-# If the script is being run (not sourced), define an alias and execute the function  
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then  
-    generate_env_file "$@"  
-else  
-    # Define an alias or function name when sourced  
-    alias generate_env_file=generate_env_file  
-fi  
+} # End of generate_env_file function  
