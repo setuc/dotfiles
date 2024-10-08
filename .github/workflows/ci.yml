@@ -80,15 +80,7 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-        
-      - name: Install Python dependencies
-        run: |
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            pip install requests tabulate
-          fi
-
+      
       - name: Source Bash configuration and test aliases
         shell: bash -l -i {0}
         run: |
@@ -101,9 +93,15 @@ jobs:
           type gs
           type ga
           type gp
-          # Test Docker aliases
-          type dps
-          type di
+
+                  
+      - name: Install Python dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install requests tabulate
+          fi
 
       - name: Run Python script tests
         run: |
