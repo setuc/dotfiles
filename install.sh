@@ -17,7 +17,10 @@ install_package() {
   
 # Install Stow  
 install_package stow  
-  
+
+# Install Oh-My-Posh
+curl -s https://ohmyposh.dev/install.sh | bash -s
+
 # Clone dotfiles repository if it doesn't exist  
 # Determine the dotfiles directory  
 if [ -d ".git" ]; then  
