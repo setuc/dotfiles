@@ -1,7 +1,6 @@
 # Azure CLI aliases  
 alias azl='az login'
 alias azal='az account list -o table'
-alias azs='az account set --subscription $(az account list --query "[?contains(name,'AIRS-Setu-')].id" --output tsv)' 
 alias azrg='az group list -o table'  
 alias azvm='az vm list -d -o table'  
 alias azaks='az aks list -o table' 
