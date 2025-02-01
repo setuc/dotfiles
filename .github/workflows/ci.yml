@@ -33,18 +33,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y stow git shellcheck jq
 
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      # - name: Azure Login
+      #   uses: azure/login@v1
+      #   with:
+      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Install Azure CLI
-        uses: azure/CLI@v1
-        with:
-          azcliversion: latest
-          inlineScript: |
-            az account show
-            az group list
+      # - name: Install Azure CLI
+      #   uses: azure/CLI@v1
+      #   with:
+      #     azcliversion: latest
+      #     inlineScript: |
+      #       az account show
+      #       az group list
 
       - name: Install dotfiles
         run: |
