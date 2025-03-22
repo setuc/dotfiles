@@ -234,30 +234,46 @@ install_miniconda() {
 
 #--------------------------------------
 # 6) (Optional) Install Node.js
-#--------------------------------------
+# Install Node.js (via apt or NVM)
+# --------------------------------------
 install_node() {
   if command_exists node; then
     echo -e "${GREEN}Node.js is already installed ($(node --version)).${NC}"
     return
   fi
 
-  echo -e "${GREEN}Node.js not found on this system.${NC}"
-  if confirm "Install Node via apt-get? (otherwise, we install via nvm)" "Y"; then
+  echo -e "${GREEN}Node.js is not found on this system.${NC}"
+
+  # Prompt: apt-get or nvm?
+  if confirm "Install Node.js via apt-get? (otherwise, installs via nvm)" "Y"; then
+    # If user chooses apt-get
     sudo apt-get update -y
     sudo apt-get install -y nodejs npm
   else
-    # Install NVM, then Node
-    if ! command_exists nvm; then
-      echo -e "${GREEN}Installing NVM...${NC}"
-      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
-      # shellcheck source=/dev/null
-      source "$HOME/.nvm/nvm.sh"
+    # If user chooses NVM
+    if [ ! -d "$HOME/.nvm" ]; then
+      echo -e "${YELLOW}Installing NVM from official GitHub (v0.40.2)...${NC}"
+      # Always best to specify the exact version you trust:
+      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
     fi
+
+    # Load NVM into current shell
+    # (Normally the install script tries to update your shell profile,
+    #  but we can source it right away for immediate usage.)
+    export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || printf %s "${XDG_CONFIG_HOME}/nvm")"
+    # shellcheck disable=SC1091
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+    # Now install Node with NVM
     echo -e "${GREEN}Installing Node (latest LTS) via nvm...${NC}"
     nvm install --lts
     nvm use --lts
+
+    # Optional: set default
+    nvm alias default node
   fi
-  echo -e "${GREEN}Node.js installation done.${NC}"
+
+  echo -e "${GREEN}Node.js installation completed.${NC}"
 }
 
 #--------------------------------------
