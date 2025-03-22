@@ -14,7 +14,7 @@
 # It will:
 #   - Prompt user to remove old dotfiles (if they want).
 #   - Parse software_list.json and prompt for each software to install via apt or a custom method.
-#   - Install oh-my-posh (needs 'unzip').
+#   - Install oh-my-posh (needs 'unzip') if it’s in software_list.json or in the dedicated function.
 #   - Optionally install Miniconda (conda).
 #   - Optionally install Node (via apt or nvm).
 #   - Use stow to symlink your dotfiles.
@@ -34,7 +34,7 @@ BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 #--------------------------------------
-# 0) Detect if running in CI for noninteractive
+# 0) Detect if running in CI (noninteractive)
 #--------------------------------------
 CI_MODE="${CI:-false}"
 if [[ "$CI_MODE" =~ ^(true|1)$ ]]; then
@@ -78,9 +78,9 @@ confirm() {
   esac
 }
 
-# This is the old "prompt_for_installation" from your setup_linux, but with color
+# This is the old "prompt_for_installation" from setup_linux.sh, but with color
 prompt_for_installation() {
-  # prompt_for_installation <software_name> <description> <default_bool>
+  # Usage: prompt_for_installation <software_name> <description> <default_bool>
   local name="$1"
   local desc="$2"
   local default_choice="$3"
@@ -141,6 +141,9 @@ install_from_software_list_json() {
   # Ensure we have 'jq'
   install_apt_pkg_if_needed "jq"
 
+  # Make sure $HOME/bin exists for oh-my-posh or other scripts
+  mkdir -p "$HOME/bin"
+
   if [[ ! -f "$this_dir/software_list.json" ]]; then
     echo -e "${RED}No software_list.json found in $this_dir; skipping that step.${NC}"
     return
@@ -151,11 +154,10 @@ install_from_software_list_json() {
 
   echo -e "${GREEN}Reading software_list.json and prompting for each...${NC}"
 
+  # apt-get update once at the start
   sudo apt-get update -y
 
   # For each key in software_list
-  # e.g. "git", "oh-my-posh", "python" ...
-  # This code is basically your old setup:
   local packages
   packages=$(echo "$software_list" | jq -r 'keys[]')
 
@@ -176,6 +178,11 @@ install_from_software_list_json() {
         sudo apt-get install -y "$apt_pkg"
       else
         # custom install logic
+        # If oh-my-posh, ensure we install unzip first
+        if [[ "$software" == "oh-my-posh" ]]; then
+          install_apt_pkg_if_needed "unzip"
+        fi
+
         if [[ -n "$custom_install" && "$custom_install" != "null" ]]; then
           echo -e "${YELLOW}Running custom install for $software...${NC}"
           eval "$custom_install"
@@ -190,10 +197,13 @@ install_from_software_list_json() {
 }
 
 #--------------------------------------
-# 4) Install oh-my-posh (with unzip)
+# 4) (Optional) oh-my-posh function
+#    If you want a dedicated function *outside* JSON
+#    to forcibly install oh-my-posh. If you're using
+#    custom_install from JSON, you might skip this.
 #--------------------------------------
-install_oh_my_posh() {
-  # Ensure unzip is installed (since oh-my-posh needs it)
+manual_install_oh_my_posh() {
+  # If you want a separate forced oh-my-posh install
   install_apt_pkg_if_needed "unzip"
 
   if command_exists oh-my-posh; then
@@ -201,7 +211,7 @@ install_oh_my_posh() {
     return
   fi
 
-  echo -e "${GREEN}Installing oh-my-posh...${NC}"
+  echo -e "${GREEN}(Manual) Installing oh-my-posh...${NC}"
   curl -s https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/bin"
 
   # Ensure ~/bin is on PATH, e.g. in ~/.bash_exports
@@ -233,27 +243,24 @@ install_miniconda() {
 }
 
 #--------------------------------------
-# 6) (Optional) Install Node.js
-# Install Node.js (via apt or NVM)
-# --------------------------------------
+# 6) (Optional) Install Node.js (via apt or NVM)
+#--------------------------------------
 install_node() {
   if command_exists node; then
     echo -e "${GREEN}Node.js is already installed ($(node --version)).${NC}"
     return
   fi
 
-  echo -e "${GREEN}Node.js is not found on this system.${NC}"
+  echo -e "${GREEN}Node.js not found on this system.${NC}"
 
   # Prompt: apt-get or nvm?
   if confirm "Install Node.js via apt-get? (otherwise, installs via nvm)" "Y"; then
-    # If user chooses apt-get
     sudo apt-get update -y
     sudo apt-get install -y nodejs npm
   else
     # If user chooses NVM
     if [ ! -d "$HOME/.nvm" ]; then
       echo -e "${YELLOW}Installing NVM from official GitHub (v0.40.2)...${NC}"
-      # Always best to specify the exact version you trust:
       curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
     fi
 
@@ -312,11 +319,12 @@ main() {
   # Possibly remove old dotfiles
   maybe_remove_old_dotfiles
 
-  # Install from software_list.json
+  # Step 3: Read from software_list.json, including oh-my-posh custom
   install_from_software_list_json
 
-  # oh-my-posh now that we have "unzip"
-  install_oh_my_posh
+  # Optionally: if you want a forced manual oh-my-posh install after the JSON,
+  # uncomment the next line:
+  # manual_install_oh_my_posh
 
   # (Optional) Miniconda
   if confirm "Install Miniconda (Conda)?" "Y"; then
@@ -331,8 +339,7 @@ main() {
   # Symlink dotfiles
   stow_dotfiles
 
-  # If needed, ensure "~/.bash_aliases" is sourced in "~/.bashrc"
-  # (like your old script)
+  # Ensure ~/.bash_aliases is sourced by ~/.bashrc if not already
   if ! grep -q "source ~/.bash_aliases" "$HOME/.bashrc"; then
     echo 'if [ -f ~/.bash_aliases ]; then source ~/.bash_aliases; fi' >> "$HOME/.bashrc"
   fi
