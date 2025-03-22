@@ -1,55 +1,65 @@
 #!/usr/bin/env bash
 #
-# bootstrap.sh - Single script to install dotfiles on Linux.
-# -----------------------------------------------
-# Features:
-#   - Color-coded prompts & output
-#   - (Optional) remove old dotfiles
-#   - Install stow
-#   - Install oh-my-posh
-#   - (Optional) install Miniconda
-#   - (Optional) install Node (via apt or nvm)
-#   - Symlink your dotfiles with stow
-#   - Source ~/.bashrc
+# setup_linux_all_in_one.sh
+# -------------------------
+# Combines logic from your install.sh and setup_linux.sh into a single script,
+# adds color-coded output, ensures oh-my-posh can be installed, can optionally
+# install Miniconda & Node, plus stows dotfiles from the repo.
 #
 # Usage:
-#   1. git clone <your-dotfiles-repo> && cd dotfiles
-#   2. chmod +x bootstrap.sh
-#   3. ./bootstrap.sh
+#   1) Place this script in your dotfiles repo root (which has software_list.json, bash/, oh-my-posh/, etc.)
+#   2) chmod +x setup_linux_all_in_one.sh
+#   3) ./setup_linux_all_in_one.sh
 #
+# It will:
+#   - Prompt user to remove old dotfiles (if they want).
+#   - Parse software_list.json and prompt for each software to install via apt or a custom method.
+#   - Install oh-my-posh (needs 'unzip').
+#   - Optionally install Miniconda (conda).
+#   - Optionally install Node (via apt or nvm).
+#   - Use stow to symlink your dotfiles.
+#   - Source ~/.bashrc (unless CI=true).
+#
+# -------------------------------------------------
 
 set -euo pipefail
 
-#-------------------------------------
-# 0) Color codes
-#-------------------------------------
+#--------------#
+# Color Codes  #
+#--------------#
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BOLD='\033[1m'
-NC='\033[0m'  # No Color
+NC='\033[0m' # No Color
 
-#-------------------------------------
-# 1) Check if running in CI mode
-#-------------------------------------
+#--------------------------------------
+# 0) Detect if running in CI for noninteractive
+#--------------------------------------
 CI_MODE="${CI:-false}"
 if [[ "$CI_MODE" =~ ^(true|1)$ ]]; then
-  echo -e "${YELLOW}Detected CI=true; running non-interactively.${NC}"
+  echo -e "${YELLOW}Detected CI=true; script will run non-interactively.${NC}"
   NONINTERACTIVE="true"
 else
   NONINTERACTIVE="false"
 fi
 
-#-------------------------------------
-# 2) Helper functions
-#-------------------------------------
+#--------------------------------------
+# 1) Helper functions
+#--------------------------------------
+
+command_exists() {
+  command -v "$1" &>/dev/null
+}
+
+# A color-coded confirm function
 confirm() {
   # Usage: confirm "message" [default=Y/N]
   local message="$1"
   local default="${2:-N}"
 
   if [[ "$NONINTERACTIVE" == "true" ]]; then
-    # If we are in CI, automatically accept if default=Y
+    # If in CI, auto-accept if default=Y
     [[ "$default" =~ ^[Yy]$ ]] && return 0 || return 1
   fi
 
@@ -68,10 +78,26 @@ confirm() {
   esac
 }
 
-command_exists() {
-  command -v "$1" &>/dev/null
+# This is the old "prompt_for_installation" from your setup_linux, but with color
+prompt_for_installation() {
+  # prompt_for_installation <software_name> <description> <default_bool>
+  local name="$1"
+  local desc="$2"
+  local default_choice="$3"
+
+  echo -e "${BOLD}${YELLOW}Install $name?${NC} ${desc}"
+  local defchar="n"
+  if [[ "$default_choice" == "true" ]]; then
+    defchar="y"
+  fi
+  if confirm "Proceed?" "$defchar"; then
+    return 0
+  else
+    return 1
+  fi
 }
 
+# Install via apt if missing
 install_apt_pkg_if_needed() {
   local pkg="$1"
   if ! dpkg -s "$pkg" &>/dev/null; then
@@ -83,37 +109,93 @@ install_apt_pkg_if_needed() {
   fi
 }
 
-#-------------------------------------
-# 3) Possibly remove existing dotfiles
-#-------------------------------------
+#--------------------------------------
+# 2) Possibly remove old dotfiles
+#--------------------------------------
 maybe_remove_old_dotfiles() {
-  local files=(.bashrc .bash_aliases .bash_exports .bash_functions .bash_prompt)
-  echo -e "${YELLOW}Dotfiles will be symlinked to your home directory.${NC}"
+  local -a files=(".bashrc" ".bash_aliases" ".bash_exports" ".bash_functions" ".bash_prompt")
+
+  echo -e "${YELLOW}We will symlink your dotfiles into your home directory.${NC}"
   echo "If you have existing config files, they might conflict."
 
   if confirm "Remove existing ~/.bashrc, ~/.bash_aliases, etc.?" "N"; then
     for f in "${files[@]}"; do
       if [[ -f "$HOME/$f" || -L "$HOME/$f" ]]; then
         rm -f "$HOME/$f"
-        echo -e "  Removed ${f}"
+        echo -e "  Removed $HOME/$f"
       fi
     done
   else
-    echo -e "${YELLOW}Skipping removal of existing dotfiles.${NC}"
+    echo -e "${YELLOW}Skipping removal of old dotfiles.${NC}"
   fi
 }
 
-#-------------------------------------
-# 4) Install stow
-#-------------------------------------
-install_stow() {
-  install_apt_pkg_if_needed stow
+#--------------------------------------
+# 3) Parse software_list.json and install
+#--------------------------------------
+install_from_software_list_json() {
+  # This merges your old logic from setup_linux.sh
+  local this_dir
+  this_dir="$( cd "$(dirname "$0")" && pwd )"
+
+  # Ensure we have 'jq'
+  install_apt_pkg_if_needed "jq"
+
+  if [[ ! -f "$this_dir/software_list.json" ]]; then
+    echo -e "${RED}No software_list.json found in $this_dir; skipping that step.${NC}"
+    return
+  fi
+
+  local software_list
+  software_list="$(cat "$this_dir/software_list.json")"
+
+  echo -e "${GREEN}Reading software_list.json and prompting for each...${NC}"
+
+  sudo apt-get update -y
+
+  # For each key in software_list
+  # e.g. "git", "oh-my-posh", "python" ...
+  # This code is basically your old setup:
+  local packages
+  packages=$(echo "$software_list" | jq -r 'keys[]')
+
+  for software in $packages; do
+    local description
+    description=$(echo "$software_list" | jq -r ".[\"$software\"].description")
+    local default_val
+    default_val=$(echo "$software_list" | jq -r ".[\"$software\"].default")
+    local apt_pkg
+    apt_pkg=$(echo "$software_list" | jq -r ".[\"$software\"].apt")
+    local custom_install
+    custom_install=$(echo "$software_list" | jq -r ".[\"$software\"].custom_install // empty")
+
+    if prompt_for_installation "$software" "$description" "$default_val"; then
+      echo -e "${GREEN}Installing $software...${NC}"
+      if [[ "$apt_pkg" != "custom" ]]; then
+        # Normal apt install
+        sudo apt-get install -y "$apt_pkg"
+      else
+        # custom install logic
+        if [[ -n "$custom_install" && "$custom_install" != "null" ]]; then
+          echo -e "${YELLOW}Running custom install for $software...${NC}"
+          eval "$custom_install"
+        else
+          echo -e "${RED}No recognized install method for $software!${NC}"
+        fi
+      fi
+    else
+      echo -e "${YELLOW}Skipping $software...${NC}"
+    fi
+  done
 }
 
-#-------------------------------------
-# 5) Install oh-my-posh (if missing)
-#-------------------------------------
+#--------------------------------------
+# 4) Install oh-my-posh (with unzip)
+#--------------------------------------
 install_oh_my_posh() {
+  # Ensure unzip is installed (since oh-my-posh needs it)
+  install_apt_pkg_if_needed "unzip"
+
   if command_exists oh-my-posh; then
     echo -e "${GREEN}oh-my-posh is already installed.${NC}"
     return
@@ -122,18 +204,18 @@ install_oh_my_posh() {
   echo -e "${GREEN}Installing oh-my-posh...${NC}"
   curl -s https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/bin"
 
-  # Because oh-my-posh was installed into ~/bin, ensure it's on the PATH
+  # Ensure ~/bin is on PATH, e.g. in ~/.bash_exports
   if ! grep -q 'export PATH="$HOME/bin:$PATH"' "$HOME/.bash_exports" 2>/dev/null; then
     echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bash_exports"
   fi
 }
 
-#-------------------------------------
-# 6) (Optional) Install conda
-#-------------------------------------
+#--------------------------------------
+# 5) (Optional) Install Miniconda
+#--------------------------------------
 install_miniconda() {
   if command_exists conda; then
-    echo -e "${GREEN}conda is already installed.${NC}"
+    echo -e "${GREEN}conda (Miniconda/Anaconda) is already installed.${NC}"
     return
   fi
 
@@ -145,97 +227,101 @@ install_miniconda() {
   bash "$installer" -b -p "$HOME/miniconda3"
   rm -f "$installer"
 
-  # Init in .bashrc
+  # Initialize conda in .bashrc
   "$HOME/miniconda3/bin/conda" init bash
-  echo -e "${GREEN}Miniconda installed. Reload shell or 'source ~/.bashrc' to use conda.${NC}"
+  echo -e "${GREEN}Miniconda installed. Please reload your shell or source ~/.bashrc to use conda.${NC}"
 }
 
-#-------------------------------------
-# 7) (Optional) Install Node.js
-#-------------------------------------
+#--------------------------------------
+# 6) (Optional) Install Node.js
+#--------------------------------------
 install_node() {
   if command_exists node; then
-    echo -e "${GREEN}Node.js is already installed: $(node --version)${NC}"
+    echo -e "${GREEN}Node.js is already installed ($(node --version)).${NC}"
     return
   fi
 
-  echo -e "${YELLOW}Node.js not found.${NC}"
+  echo -e "${GREEN}Node.js not found on this system.${NC}"
   if confirm "Install Node via apt-get? (otherwise, we install via nvm)" "Y"; then
     sudo apt-get update -y
     sudo apt-get install -y nodejs npm
   else
-    # Install NVM, then install Node
+    # Install NVM, then Node
     if ! command_exists nvm; then
       echo -e "${GREEN}Installing NVM...${NC}"
       curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
       # shellcheck source=/dev/null
       source "$HOME/.nvm/nvm.sh"
     fi
-    echo -e "${GREEN}Installing latest LTS Node via nvm...${NC}"
+    echo -e "${GREEN}Installing Node (latest LTS) via nvm...${NC}"
     nvm install --lts
     nvm use --lts
   fi
-  echo -e "${GREEN}Node.js installation complete.${NC}"
+  echo -e "${GREEN}Node.js installation done.${NC}"
 }
 
-#-------------------------------------
-# 8) Use stow to symlink dotfiles
-#-------------------------------------
-symlink_dotfiles() {
+#--------------------------------------
+# 7) Stow your dotfiles
+#--------------------------------------
+stow_dotfiles() {
+  # Integrate from install.sh
+  echo -e "${GREEN}Using stow to symlink dotfiles...${NC}"
   local dotfiles_dir
-  dotfiles_dir="$( cd "$(dirname "$0")" && pwd )"  # script's directory
+  dotfiles_dir="$( cd "$(dirname "$0")" && pwd )"
 
-  # If your dotfiles are at this same repo root, we can do:
-  # e.g. stow bash, oh-my-posh, bin, etc.
-  echo -e "${GREEN}Symlinking dotfiles from: $dotfiles_dir${NC}"
   stow --verbose --restow --dir="$dotfiles_dir" --target="$HOME" bash bin oh-my-posh vim
-  # If you have more directories: add them above (like 'aliases', 'functions' etc.),
-  # or keep them inside 'bash' folder structure.
+  # Add any other directories you want to stow, e.g.:
+  # stow --verbose --restow --dir="$dotfiles_dir" --target="$HOME" <something_else>
 }
 
-#-------------------------------------
-# 9) Reload .bashrc
-#-------------------------------------
+#--------------------------------------
+# 8) Final step: source ~/.bashrc
+#--------------------------------------
 reload_bashrc() {
   if [[ "$NONINTERACTIVE" == "true" ]]; then
-    echo -e "${YELLOW}CI mode: not sourcing .bashrc automatically.${NC}"
-    return
+    echo -e "${YELLOW}CI mode: skipping direct sourcing of .bashrc.${NC}"
+  else
+    echo -e "${GREEN}Reloading ~/.bashrc now...${NC}"
+    # shellcheck source=/dev/null
+    source "$HOME/.bashrc"
   fi
-
-  echo -e "${GREEN}Reloading your new ~/.bashrc...${NC}"
-  # shellcheck source=/dev/null
-  source "$HOME/.bashrc"
 }
 
-#-------------------------------------
+#--------------------------------------
 # MAIN
-#-------------------------------------
+#--------------------------------------
 main() {
-  echo -e "${BOLD}=== Dotfiles Linux Bootstrap ===${NC}"
+  echo -e "${BOLD}=== Combined Linux Setup ===${NC}"
 
-  # Possibly remove old files
+  # Possibly remove old dotfiles
   maybe_remove_old_dotfiles
 
-  # Ensure stow
-  install_stow
+  # Install from software_list.json
+  install_from_software_list_json
 
-  # oh-my-posh
+  # oh-my-posh now that we have "unzip"
   install_oh_my_posh
 
-  # Conda (optional)
-  if confirm "Install Miniconda (conda)?" "Y"; then
+  # (Optional) Miniconda
+  if confirm "Install Miniconda (Conda)?" "Y"; then
     install_miniconda
   fi
 
-  # Node (optional)
+  # (Optional) Node.js
   if confirm "Install Node.js?" "Y"; then
     install_node
   fi
 
-  # stow dotfiles
-  symlink_dotfiles
+  # Symlink dotfiles
+  stow_dotfiles
 
-  # reload .bashrc
+  # If needed, ensure "~/.bash_aliases" is sourced in "~/.bashrc"
+  # (like your old script)
+  if ! grep -q "source ~/.bash_aliases" "$HOME/.bashrc"; then
+    echo 'if [ -f ~/.bash_aliases ]; then source ~/.bash_aliases; fi' >> "$HOME/.bashrc"
+  fi
+
+  # Source ~/.bashrc
   reload_bashrc
 
   echo -e "${GREEN}All done!${NC}"
