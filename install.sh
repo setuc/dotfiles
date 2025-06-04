@@ -37,18 +37,23 @@ else
 fi  
   
 # Remove existing conflicting files in the home directory  
-if [ "$CI" = "true" ]; then  
-    # Remove existing conflicting files in the home directory  
-    rm -f "$HOME/.bashrc" "$HOME/.bash_aliases" "$HOME/.bash_exports" "$HOME/.bash_functions" "$HOME/.bash_prompt"  
-else  
-    echo "This script will remove your existing configuration files and replace them with symlinks."  
-    read -rp "Are you sure you want to proceed? [y/N]: " response  
-    if [[ "$response" =~ ^[Yy]$ ]]; then  
-        rm -f "$HOME/.bashrc" "$HOME/.bash_aliases" "$HOME/.bash_exports" "$HOME/.bash_functions" "$HOME/.bash_prompt"  
-    else  
-        echo "Aborting."  
-        exit 1  
-    fi  
+NONINTERACTIVE=false
+if [ "$CI" = "true" ] || [ -n "$CODESPACES" ]; then
+    NONINTERACTIVE=true
+fi
+
+if [ "$NONINTERACTIVE" = "true" ]; then
+    # Remove existing conflicting files in the home directory without prompting
+    rm -f "$HOME/.bashrc" "$HOME/.bash_aliases" "$HOME/.bash_exports" "$HOME/.bash_functions" "$HOME/.bash_prompt"
+else
+    echo "This script will remove your existing configuration files and replace them with symlinks."
+    read -rp "Are you sure you want to proceed? [y/N]: " response
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        rm -f "$HOME/.bashrc" "$HOME/.bash_aliases" "$HOME/.bash_exports" "$HOME/.bash_functions" "$HOME/.bash_prompt"
+    else
+        echo "Aborting."
+        exit 1
+    fi
 fi
 
 # Use Stow to symlink configurations  
