@@ -16,6 +16,29 @@
         - item.value.apt != 'custom'
       loop: "{{ software_list | dict2items }}"
 
+    - name: Install jq for helper scripts
+      become: true
+      ansible.builtin.apt:
+        name: jq
+        state: present
+
+    - name: Check for Azure CLI
+      ansible.builtin.command: az --version
+      register: azure_cli_check
+      ignore_errors: true
+
+    - name: Install Azure CLI
+      become: true
+      ansible.builtin.shell: curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+      args:
+        executable: /bin/bash
+      when: azure_cli_check.rc != 0
+
+    - name: Install Python requirements
+      become: true
+      ansible.builtin.pip:
+        requirements: "{{ dotfiles_dir }}/requirements.txt"
+
     - name: Ensure ~/bin directory exists
       ansible.builtin.file:
         path: "{{ ansible_env.HOME }}/bin"

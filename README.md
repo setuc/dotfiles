@@ -63,6 +63,20 @@ This repository contains my personal dotfiles and configurations for various env
 
 ## Setup Instructions
 
+### Dependencies
+The Ansible playbook installs all Python packages from `requirements.txt` as
+well as the CLI tools `jq` and the Azure CLI. If you prefer to run the scripts
+without using the playbook, install them manually:
+
+```bash
+pip install -r requirements.txt
+sudo apt-get install -y jq
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+```
+
+`jq` and the Azure CLI are used by scripts in `bin/` such as
+`checkspotprice.sh`.
+
 ### Ansible Setup (recommended)
 1. Install Ansible (e.g. `sudo apt install ansible`).
 2. Clone the repository
@@ -116,6 +130,7 @@ These initializations are placed in ```~/.bash_exports```, which is sourced by `
 
 * **Aliases**: All aliases are organized in the bash/aliases/ directory and are sourced in ~/.bash_aliases.
   * The `uv.aliases` file provides handy shortcuts for Astral's uv package manager, such as `uvs` for `uv sync` and `uvps` for `uv pip sync`.
+  * Use `dfsetup` to run the Ansible playbook quickly: `ansible-playbook -i localhost, -c local --ask-become-pass setup.yml`.
 * **Functions**: Functions are categorized and placed in bash/functions/ and its subdirectories. They are sourced in ~/.bash_functions.
 * **Scripts**: Executable scripts are located in the bin/ directory, which is added to your PATH.
 Notes
