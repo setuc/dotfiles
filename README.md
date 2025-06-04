@@ -99,6 +99,30 @@ These initializations are placed in ```~/.bash_exports```, which is sourced by `
 * **Functions**: Functions are categorized and placed in bash/functions/ and its subdirectories. They are sourced in ~/.bash_functions.
 * **Scripts**: Executable scripts are located in the bin/ directory, which is added to your PATH.
 Notes
+
+## Using the Ansible Playbook
+
+This repository includes an Ansible playbook that can configure the local machine or a remote host with the provided dotfiles.
+
+### Run Locally
+
+1. Install Ansible
+   ```bash
+   sudo apt-get update && sudo apt-get install -y ansible
+   ```
+2. Execute the playbook
+   ```bash
+   ansible-playbook -i 'localhost,' -c local ansible/site.yml
+   ```
+
+### Run Against Remote Hosts
+
+Specify an inventory file or pass the hosts on the command line:
+
+```bash
+ansible-playbook -i inventory ansible/site.yml
+```
+
  
 ## Additional Configuration
 

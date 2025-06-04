@@ -1,0 +1,65 @@
+---
+- name: Load software list
+  set_fact:
+    software_list: "{{ lookup('file', playbook_dir + '/../software_list.json') | from_json }}"
+
+- name: Install apt packages
+  ansible.builtin.apt:
+    name: "{{ item.value.apt }}"
+    state: present
+    update_cache: yes
+  loop: "{{ software_list | dict2items }}"
+  when:
+    - item.value.apt is defined
+    - item.value.apt != 'custom'
+
+- name: Install oh-my-posh via command
+  ansible.builtin.command: "{{ software_list['oh-my-posh'].custom_install }}"
+  args:
+    creates: "{{ ansible_env.HOME }}/bin/oh-my-posh"
+  when:
+    - software_list['oh-my-posh'].custom_install is defined
+    - oh_my_posh_method | default('command') == 'command'
+    - install_oh_my_posh | default(true)
+
+- name: Install oh-my-posh via get_url
+  ansible.builtin.get_url:
+    url: "https://github.com/JanDeDobbeleer/oh-my-posh/releases/latest/download/posh-linux-amd64"
+    dest: /usr/local/bin/oh-my-posh
+    mode: '0755'
+    checksum: "{{ oh_my_posh_checksum | default(omit) }}"
+  when:
+    - oh_my_posh_method | default('command') == 'get_url'
+    - install_oh_my_posh | default(true)
+
+- name: Clone dotfiles repository
+  ansible.builtin.git:
+    repo: 'https://github.com/setuc/dotfiles.git'
+    dest: "{{ ansible_env.HOME }}/dotfiles"
+    version: HEAD
+    update: yes
+
+- name: Stow configuration directories
+  ansible.builtin.command:
+    cmd: "stow --restow --dir={{ ansible_env.HOME }}/dotfiles --target={{ ansible_env.HOME }} {{ item }}"
+  loop:
+    - bash
+    - bin
+    - oh-my-posh
+    - vim
+
+- name: Copy alias files
+  ansible.builtin.copy:
+    src: "{{ ansible_env.HOME }}/dotfiles/bash/aliases/"
+    dest: "{{ ansible_env.HOME }}/aliases/"
+    owner: "{{ ansible_user | default(lookup('env','USER')) }}"
+    mode: '0644'
+    remote_src: yes
+
+- name: Copy function files
+  ansible.builtin.copy:
+    src: "{{ ansible_env.HOME }}/dotfiles/bash/functions/"
+    dest: "{{ ansible_env.HOME }}/functions/"
+    owner: "{{ ansible_user | default(lookup('env','USER')) }}"
+    mode: '0644'
+    remote_src: yes
