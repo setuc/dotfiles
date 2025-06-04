@@ -37,6 +37,29 @@
         name: stow
         state: present
 
+    - name: Check if ~/.bashrc exists and is not a symlink
+      ansible.builtin.stat:
+        path: "{{ ansible_env.HOME }}/.bashrc"
+        follow: false
+      register: bashrc_stat
+
+    - name: Backup existing ~/.bashrc
+      ansible.builtin.copy:
+        src: "{{ ansible_env.HOME }}/.bashrc"
+        dest: "{{ ansible_env.HOME }}/.bashrc.backup"
+        remote_src: true
+      when:
+        - bashrc_stat.stat.exists
+        - not bashrc_stat.stat.islnk
+
+    - name: Remove ~/.bashrc to avoid stow conflicts
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.bashrc"
+        state: absent
+      when:
+        - bashrc_stat.stat.exists
+        - not bashrc_stat.stat.islnk
+
     - name: Stow dotfiles
       ansible.builtin.shell: |
         stow --verbose --restow --dir={{ dotfiles_dir }} --target=$HOME bash bin oh-my-posh
