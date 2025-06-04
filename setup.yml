@@ -1,13 +1,14 @@
 ---
-- hosts: localhost
-  gather_facts: yes
+- name: Setup local environment
+  hosts: localhost
+  gather_facts: true
   vars:
     software_list: "{{ lookup('file', 'software_list.json') | from_json }}"
     dotfiles_dir: "{{ playbook_dir }}"
   tasks:
     - name: Install apt packages
-      become: yes
-      apt:
+      become: true
+      ansible.builtin.apt:
         name: "{{ item.value.apt }}"
         state: present
       when:
@@ -15,26 +16,31 @@
         - item.value.apt != 'custom'
       loop: "{{ software_list | dict2items }}"
 
+    - name: Ensure ~/bin directory exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/bin"
+        state: directory
+        mode: "0755"
+
     - name: Run custom install commands
-      become: yes
-      shell: "{{ item.value.custom_install }}"
+      ansible.builtin.shell: "{{ item.value.custom_install }}"
       args:
         executable: /bin/bash
       when:
         - item.value.custom_install is defined
         - item.value.apt == 'custom'
       loop: "{{ software_list | dict2items }}"
-
+      changed_when: false
     - name: Ensure Stow is installed
-      become: yes
-      apt:
+      become: true
+      ansible.builtin.apt:
         name: stow
         state: present
 
     - name: Stow dotfiles
-      shell: |
+      ansible.builtin.shell: |
         stow --verbose --restow --dir={{ dotfiles_dir }} --target=$HOME bash bin oh-my-posh
       args:
         chdir: "{{ dotfiles_dir }}"
         executable: /bin/bash
-
+      changed_when: false
