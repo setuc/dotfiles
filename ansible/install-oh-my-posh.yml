@@ -1,0 +1,21 @@
+---
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Download oh-my-posh install script
+      ansible.builtin.get_url:
+        url: https://ohmyposh.dev/install.sh
+        dest: /tmp/oh-my-posh-install.sh
+        mode: '0755'
+        checksum: sha256:d7e33fc74dee0501c495afec5678c9b8aece3a08a75002ba29b87ffaff6bc18a
+
+    - name: Ensure ~/bin directory exists
+      ansible.builtin.file:
+        path: "{{ lookup('env','HOME') }}/bin"
+        state: directory
+        mode: '0755'
+
+    - name: Execute oh-my-posh installer
+      ansible.builtin.command: bash /tmp/oh-my-posh-install.sh -d ~/bin
+      args:
+        creates: ~/bin/oh-my-posh
