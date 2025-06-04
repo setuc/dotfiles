@@ -1,0 +1,5 @@
+# uv aliases
+alias uvs='uv sync'
+alias uvp='uv pip'
+alias uvpi='uv pip install'
+alias uvps='uv pip sync'

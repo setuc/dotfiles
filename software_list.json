@@ -29,5 +29,11 @@
         "winget": "OpenJS.NodeJS",
         "apt": "nodejs",
         "default": false
+    },
+    "uv": {
+        "description": "Blazingly fast Python package manager from Astral",
+        "apt": "custom",
+        "default": false,
+        "custom_install": "curl -Ls https://astral.sh/uv/install.sh | bash"
     }
 }

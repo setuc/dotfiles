@@ -91,6 +91,9 @@ pointing to Windows paths. Temporarily move those out of the way if you see
 This playbook installs Oh My Posh into `~/bin`. The directory is created
 automatically if it does not already exist.
 
+The setup also installs Astral's `uv` package manager using its official
+installation script, which places the binary in `~/.local/bin` by default.
+
 ### Legacy Shell Scripts
 Legacy scripts (install.sh, setup_linux.sh, setup_windows.sh) are deprecated and kept only for reference.
 ### Setting Up Oh My Posh
@@ -112,6 +115,7 @@ These initializations are placed in ```~/.bash_exports```, which is sourced by `
 ## Usage
 
 * **Aliases**: All aliases are organized in the bash/aliases/ directory and are sourced in ~/.bash_aliases.
+  * The `uv.aliases` file provides handy shortcuts for Astral's uv package manager, such as `uvs` for `uv sync` and `uvps` for `uv pip sync`.
 * **Functions**: Functions are categorized and placed in bash/functions/ and its subdirectories. They are sourced in ~/.bash_functions.
 * **Scripts**: Executable scripts are located in the bin/ directory, which is added to your PATH.
 Notes
