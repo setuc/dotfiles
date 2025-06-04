@@ -66,11 +66,12 @@ This repository contains my personal dotfiles and configurations for various env
 ### Dependencies
 The Ansible playbook installs all Python packages from `requirements.txt` as
 well as the CLI tools `jq` and the Azure CLI. If you prefer to run the scripts
-without using the playbook, install them manually:
+without using the playbook, install them manually. You'll need Python, pip, and
+jq installed first:
 
 ```bash
+sudo apt-get install -y python3 python3-pip jq
 pip install -r requirements.txt
-sudo apt-get install -y jq
 curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 ```
 
