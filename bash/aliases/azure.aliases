@@ -1,9 +1,9 @@
-# Azure CLI aliases  
+# Azure CLI aliases
 alias azl='az login'
 alias azal='az account list -o table'
-alias azrg='az group list -o table'  
-alias azvm='az vm list -d -o table'  
-alias azaks='az aks list -o table' 
+alias azrg='az group list -o table'
+alias azvm='az vm list -d -o table'
+alias azaks='az aks list -o table'
 
 #Azure Machine Learing Conda aliases
 alias coap='conda activate azureml_py310_sdkv2'
@@ -13,4 +13,6 @@ alias codtf='conda deactivate azureml_py38_PT_TF'
 alias coup='conda env update --file environment.yml --prune'
 
 # Azure default working directory
-alias wd='cd /home/azureuser/cloudfiles/code/Users/setuchokshi/'
+# Default working directory for Azure ML compute instances
+# Allows overriding the path by setting AML_CODE_DIR
+alias wd='cd "${AML_CODE_DIR:-/home/azureuser/cloudfiles/code/Users/setuchokshi/}"'
