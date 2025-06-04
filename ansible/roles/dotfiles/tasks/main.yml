@@ -1,17 +1,24 @@
 ---
 - name: Load software list
-  set_fact:
+  ansible.builtin.set_fact:
     software_list: "{{ lookup('file', playbook_dir + '/../software_list.json') | from_json }}"
 
 - name: Install apt packages
   ansible.builtin.apt:
     name: "{{ item.value.apt }}"
     state: present
-    update_cache: yes
+    update_cache: true
   loop: "{{ software_list | dict2items }}"
+  changed_when: false
   when:
     - item.value.apt is defined
     - item.value.apt != 'custom'
+
+- name: Ensure ~/bin directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/bin"
+    state: directory
+    mode: '0755'
 
 - name: Install oh-my-posh via command
   ansible.builtin.command: "{{ software_list['oh-my-posh'].custom_install }}"
@@ -36,8 +43,8 @@
   ansible.builtin.git:
     repo: 'https://github.com/setuc/dotfiles.git'
     dest: "{{ ansible_env.HOME }}/dotfiles"
-    version: HEAD
-    update: yes
+    version: d144c11245fb0418a7ead33c640c575ef83e5420
+    update: true
 
 - name: Stow configuration directories
   ansible.builtin.command:
@@ -47,19 +54,20 @@
     - bin
     - oh-my-posh
     - vim
+  changed_when: false
 
 - name: Copy alias files
   ansible.builtin.copy:
     src: "{{ ansible_env.HOME }}/dotfiles/bash/aliases/"
     dest: "{{ ansible_env.HOME }}/aliases/"
-    owner: "{{ ansible_user | default(lookup('env','USER')) }}"
+    owner: "{{ ansible_user | default(lookup('env', 'USER')) }}"
     mode: '0644'
-    remote_src: yes
+    remote_src: true
 
 - name: Copy function files
   ansible.builtin.copy:
     src: "{{ ansible_env.HOME }}/dotfiles/bash/functions/"
     dest: "{{ ansible_env.HOME }}/functions/"
-    owner: "{{ ansible_user | default(lookup('env','USER')) }}"
+    owner: "{{ ansible_user | default(lookup('env', 'USER')) }}"
     mode: '0644'
-    remote_src: yes
+    remote_src: true

@@ -1,5 +1,5 @@
 # Dotfiles
-This repository contains my personal dotfiles and configurations for various environments, including local WSL (Windows Subsystem for Linux), Azure Machine Learning Compute Instances, GitHub Codespaces, and remote Linux terminals.
+This repository contains my personal dotfiles and configurations for various environments, including local WSL (Windows Subsystem for Linux), Azure Machine Learning Compute Instances, GitHub Codespaces, and remote Linux terminals. The Ansible playbook has been tested across these setups to ensure consistent behavior.
 
 ## Directory Structure
 .dotfiles/  
@@ -74,6 +74,11 @@ cd ~/.dotfiles
 ```bash
 ansible-playbook -i localhost, -c local setup.yml
 ```
+Run this command as your regular user; the playbook elevates privileges only
+when needed for package installation.
+
+This playbook installs Oh My Posh into `~/bin`. The directory is created
+automatically if it does not already exist.
 
 ### Legacy Shell Scripts
 Legacy scripts (install.sh, setup_linux.sh, setup_windows.sh) are deprecated and kept only for reference.
