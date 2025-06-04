@@ -37,6 +37,26 @@ curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
 `jq` and the Azure CLI are required by some helper scripts in the `bin/` directory.
 
+### Git configuration
+
+Set your global Git identity if it is not configured already:
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "your.email@example.com"
+```
+
+### Nerd Fonts
+
+For proper icons in the terminal prompt install a Nerd Font. The playbook can install [getnf](https://github.com/getnf/getnf) which downloads fonts directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/getnf/getnf/main/install.sh | bash
+~/.local/bin/getnf -i IosevkaTerm
+```
+
+You can browse other fonts at <https://www.nerdfonts.com/>.
+
 ## Repository layout
 
 - `bash/` – Bash configuration files, aliases, functions and completions
@@ -49,6 +69,8 @@ curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
 - A `.pre-commit-config.yaml` is included to run `black`, `ruff` and `shellcheck`. Install [pre‑commit](https://pre-commit.com/) and run `pre-commit install` to enable automatic checks.
 - Oh My Posh is installed into `~/bin` and initialised from `.bashrc` using the theme in `oh-my-posh/themes/night-owl.omp.json`.
+
+The `wd` alias defaults to the Azure ML working directory but respects the `AML_CODE_DIR` environment variable so you can override it as needed.
 
 ---
 

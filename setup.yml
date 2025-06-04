@@ -91,3 +91,27 @@
         chdir: "{{ dotfiles_dir }}"
         executable: /bin/bash
       changed_when: false
+
+    - name: Configure git user.name
+      ansible.builtin.git_config:
+        name: user.name
+        scope: global
+        value: "{{ git_user_name | default('Your Name') }}"
+
+    - name: Configure git user.email
+      ansible.builtin.git_config:
+        name: user.email
+        scope: global
+        value: "{{ git_user_email | default('your.email@example.com') }}"
+
+    - name: Install getnf script
+      ansible.builtin.shell: |
+        curl -fsSL https://raw.githubusercontent.com/getnf/getnf/main/install.sh | bash
+      args:
+        executable: /bin/bash
+        creates: "{{ ansible_env.HOME }}/.local/bin/getnf"
+
+    - name: Install Iosevka Term Nerd Font
+      ansible.builtin.command: "{{ ansible_env.HOME }}/.local/bin/getnf -i IosevkaTerm"
+      args:
+        creates: "{{ ansible_env.HOME }}/.local/share/fonts/IosevkaTerm"
