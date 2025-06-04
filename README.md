@@ -154,7 +154,28 @@ ansible-playbook -i inventory ansible/site.yml
     git config --global user.email "your.email@example.com" 
     ```
 * Nerd Fonts Installation
-installing Nerd Fonts for better terminal icons from https://github.com/ryanoasis/nerd-fonts or https://www.nerdfonts.com/.  
+installing Nerd Fonts for better terminal icons from https://github.com/ryanoasis/nerd-fonts or https://www.nerdfonts.com/.
+
+## Terraform Templates
+The `terraform/` directory contains modular templates using the
+HashiCorp [azurerm](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs)
+provider. Use these configurations to create a resource group, storage account,
+Key Vault, Application Insights, and a Machine Learning workspace.
+
+```bash
+cd terraform
+terraform init
+terraform apply -var="prefix=mydemo" -var="resource_group_name=my-rg" -var="location=eastus"
+```
+
+## Pre-commit Hooks
+A `.pre-commit-config.yaml` is included to run `black`, `ruff`, and `shellcheck`.
+Install pre-commit and run `pre-commit install` to automatically format code
+before each commit.
+
+## Custom Working Directory
+The `wd` alias now respects the `AML_CODE_DIR` environment variable so you can
+override the default Azure ML path if needed.
 
 #### TODO plan to wokr with install nerd fonts directly from the terminal. https://github.com/getnf/getnf
 

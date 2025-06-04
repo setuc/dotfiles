@@ -1,0 +1,34 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Packages
+*.egg
+*.egg-info/
+.dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Python env files
+.env
+.env.*
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# Misc
+.DS_Store
+.idea/
+.vscode/
+
