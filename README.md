@@ -72,10 +72,21 @@ cd ~/.dotfiles
 ```
 3. Run the playbook
 ```bash
-ansible-playbook -i localhost, -c local setup.yml
+ansible-playbook -i localhost, -c local --ask-become-pass setup.yml
 ```
 Run this command as your regular user; the playbook elevates privileges only
-when needed for package installation.
+when needed for package installation. The `--ask-become-pass` flag prompts for
+your sudo password; omit it if you have passwordless sudo.
+
+If you already have a `~/.bashrc` file, Stow may report conflicts. Back it up
+before running the playbook:
+
+```bash
+mv ~/.bashrc ~/.bashrc.backup
+```
+Stow can also fail on WSL if you have symlinks like `~/.aws` or `~/.azure`
+pointing to Windows paths. Temporarily move those out of the way if you see
+`Absolute/relative mismatch` errors.
 
 This playbook installs Oh My Posh into `~/bin`. The directory is created
 automatically if it does not already exist.
@@ -117,8 +128,10 @@ This repository includes an Ansible playbook that can configure the local machin
    ```
 2. Execute the playbook
    ```bash
-   ansible-playbook -i 'localhost,' -c local ansible/site.yml
+   ansible-playbook -i 'localhost,' -c local --ask-become-pass setup.yml
    ```
+   The `--ask-become-pass` flag prompts for your sudo password; omit it if you
+   have passwordless sudo.
 
 ### Run Against Remote Hosts
 
