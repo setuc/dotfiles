@@ -16,11 +16,14 @@ install_package() {
     fi  
 }  
   
-# Install Stow  
-install_package stow  
+# Install Stow
+install_package stow
 
-# Install Oh-My-Posh
-curl -s https://ohmyposh.dev/install.sh | bash -s
+# Install Ansible
+install_package ansible
+
+# Install Oh-My-Posh using Ansible playbook
+ansible-playbook ansible/install-oh-my-posh.yml
 
 # Clone dotfiles repository if it doesn't exist  
 # Determine the dotfiles directory  
