@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# DEPRECATED: use the setup.yml Ansible playbook instead.
 #
 # setup_linux_all_in_one.sh
 # -------------------------
