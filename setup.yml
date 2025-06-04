@@ -38,6 +38,7 @@
       become: true
       ansible.builtin.pip:
         requirements: "{{ dotfiles_dir }}/requirements.txt"
+        extra_args: --break-system-packages
 
     - name: Ensure ~/bin directory exists
       ansible.builtin.file:
