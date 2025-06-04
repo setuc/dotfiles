@@ -1,4 +1,5 @@
 #!/bin/bash  
+# DEPRECATED: use the setup.yml Ansible playbook instead.
   
 # Function to check if a command exists  
 command_exists() {  

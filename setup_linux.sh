@@ -1,4 +1,5 @@
 #!/bin/bash  
+# DEPRECATED: use the setup.yml Ansible playbook instead.
   
 # Setup script for Linux environment  
   

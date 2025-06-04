@@ -56,35 +56,27 @@ This repository contains my personal dotfiles and configurations for various env
    * functions/: Contains categorized function scripts, organized into subdirectories.
    * scripts/: Contains scripts that can be sourced or executed directly.
 * bin/: Contains executable scripts that are added to your PATH for global access.
-* install.sh: Script to set up the dotfiles by installing necessary packages and creating symlinks using stow.
+* install.sh, setup_linux.sh and setup_windows.sh: Deprecated shell scripts kept for reference.
 * oh-my-posh/: Contains oh-my-posh themes and configurations.
-* setup_linux.sh and setup_windows.sh: Setup scripts for Linux and Windows environments, respectively.
+* setup.yml: Primary Ansible playbook for setting up the environment.
 * README.md: This file.
 
 ## Setup Instructions
 
-### Linux Fresh Install
-1. Clone the Repository
-   ```bash
-   git clone https://github.com/setuc/dotfiles.git ~/.dotfiles  
-   ```
-2. Navigate to the Directory
-   ```bash
-   cd ~/.dotfiles  
-   ```
-3. Make Scripts Executable
-   ```bash
-   chmod +x install.sh setup_linux.sh
-   ```
-4. Run the Install Script
-   ```bash
-   ./install.sh  
-   ```
-5. Run the Linux Setup Script
-   ```bash
-   ../setup_linux.sh 
-   ```
+### Ansible Setup (recommended)
+1. Install Ansible (e.g. `sudo apt install ansible`).
+2. Clone the repository
+```bash
+git clone https://github.com/setuc/dotfiles.git ~/.dotfiles
+cd ~/.dotfiles
+```
+3. Run the playbook
+```bash
+ansible-playbook -i localhost, -c local setup.yml
+```
 
+### Legacy Shell Scripts
+Legacy scripts (install.sh, setup_linux.sh, setup_windows.sh) are deprecated and kept only for reference.
 ### Setting Up Oh My Posh
 Oh My Posh is initialized in the ```~/.bashrc``` file. The theme used is night-owl.omp.json, located in the ```oh-my-posh/themes/``` directory.
 
