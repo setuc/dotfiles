@@ -1,0 +1,145 @@
+---
+# handlers/main.yml - Event handlers for azure-vm role
+#
+# These handlers are triggered by tasks using the 'notify' directive.
+# They ensure services are properly restarted or reloaded when configuration changes.
+
+- name: restart sshd
+  service:
+    name: "{{ sshd_service_name | default('sshd') }}"
+    state: restarted
+  become: true
+  when: ansible_connection != 'local'
+
+- name: restart nginx
+  service:
+    name: nginx
+    state: restarted
+  become: true
+  when: webserver_type | default('nginx') == 'nginx'
+
+- name: restart apache
+  service:
+    name: "{{ apache_service_name | default('apache2') }}"
+    state: restarted
+  become: true
+  when: webserver_type | default('nginx') == 'apache'
+
+- name: reload nginx
+  service:
+    name: nginx
+    state: reloaded
+  become: true
+  when: webserver_type | default('nginx') == 'nginx'
+
+- name: restart docker
+  service:
+    name: docker
+    state: restarted
+  become: true
+
+- name: restart postgresql
+  service:
+    name: postgresql
+    state: restarted
+  become: true
+  when: database_type | default('postgresql') == 'postgresql'
+
+- name: restart mysql
+  service:
+    name: mysql
+    state: restarted
+  become: true
+  when: database_type | default('postgresql') == 'mysql'
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+  become: true
+
+- name: restart firewall
+  service:
+    name: "{{ firewall_service_name | default('ufw') }}"
+    state: restarted
+  become: true
+  when: firewall_enabled | default(true) | bool
+
+- name: update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  become: true
+  when: ansible_os_family == "Debian"
+
+- name: update yum cache
+  yum:
+    update_cache: yes
+  become: true
+  when: ansible_os_family == "RedHat"
+
+- name: reboot system
+  reboot:
+    msg: "Reboot initiated by Ansible azure-vm role"
+    connect_timeout: 5
+    reboot_timeout: 600
+    pre_reboot_delay: 0
+    post_reboot_delay: 30
+    test_command: whoami
+  become: true
+  when: ansible_connection != 'local'
+
+- name: wait for system
+  wait_for_connection:
+    delay: 30
+    timeout: 300
+  when: ansible_connection != 'local'
+
+- name: restart fail2ban
+  service:
+    name: fail2ban
+    state: restarted
+  become: true
+  failed_when: false
+
+- name: restart chrony
+  service:
+    name: "{{ ntp_service_name | default('chrony') }}"
+    state: restarted
+  become: true
+  failed_when: false
+
+- name: save iptables rules
+  shell: |
+    if command -v netfilter-persistent >/dev/null 2>&1; then
+      netfilter-persistent save
+    elif command -v iptables-save >/dev/null 2>&1; then
+      iptables-save > /etc/iptables/rules.v4
+      ip6tables-save > /etc/iptables/rules.v6
+    fi
+  become: true
+  failed_when: false
+
+- name: send notification
+  debug:
+    msg: "Notification: {{ notification_message | default('Operation completed') }}"
+  when: enable_notifications | default(false) | bool
+
+- name: restart ufw
+  service:
+    name: ufw
+    state: restarted
+  become: true
+  when: configure_host_firewall | default(true) | bool
+
+- name: update nsg rules
+  debug:
+    msg: "NSG rules have been updated. Please verify access is working correctly."
+
+- name: validate ssh access
+  wait_for:
+    port: 22
+    host: "{{ vm_public_ip | default(vm_private_ip) }}"
+    delay: 5
+    timeout: 30
+  delegate_to: localhost
+  when: validate_after_changes | default(true) | bool

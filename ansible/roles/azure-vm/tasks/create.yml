@@ -1,0 +1,197 @@
+---
+# tasks/create.yml - VM creation with security-first approach
+#
+# This task file creates Azure VM resources with strict security controls.
+# Network Security Group is created with DENY ALL by default, then updated
+# to allow SSH only from the detected source IP.
+
+- name: Create resource group
+  azure.azcollection.azure_rm_resourcegroup:
+    name: "{{ azure_resource_group }}"
+    location: "{{ azure_region }}"
+    tags: "{{ resource_tags }}"
+  when: not resource_group_exists
+
+- name: Create virtual network
+  azure.azcollection.azure_rm_virtualnetwork:
+    name: "{{ vnet_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    address_prefixes:
+      - "{{ vnet_address_prefix }}"
+    tags: "{{ resource_tags }}"
+
+- name: Create subnet
+  azure.azcollection.azure_rm_subnet:
+    name: "{{ subnet_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    virtual_network: "{{ vnet_name }}"
+    address_prefix: "{{ subnet_address_prefix }}"
+
+- name: Create Network Security Group with DENY ALL default
+  azure.azcollection.azure_rm_securitygroup:
+    name: "{{ nsg_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    rules: []  # Start with no rules - default is DENY ALL
+    tags: "{{ resource_tags }}"
+
+- name: Create public IP address
+  azure.azcollection.azure_rm_publicipaddress:
+    name: "{{ public_ip_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    allocation_method: Static
+    sku: Standard
+    tags: "{{ resource_tags }}"
+  register: public_ip
+  when: enable_public_ip | default(true) | bool
+
+- name: Create network interface
+  azure.azcollection.azure_rm_networkinterface:
+    name: "{{ nic_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    virtual_network: "{{ vnet_name }}"
+    subnet: "{{ subnet_name }}"
+    security_group: "{{ nsg_name }}"
+    ip_configurations:
+      - name: ipconfig1
+        public_ip_address_name: "{{ public_ip_name if enable_public_ip | default(true) | bool else omit }}"
+        primary: true
+    enable_accelerated_networking: "{{ enable_accelerated_networking | default(false) }}"
+    tags: "{{ resource_tags }}"
+
+- name: Create VM with managed identity
+  azure.azcollection.azure_rm_virtualmachine:
+    name: "{{ vm_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    vm_size: "{{ vm_size }}"
+    managed_disk_type: "{{ vm_managed_disk_type | default('Premium_LRS') }}"
+    os_disk_size_gb: "{{ vm_os_disk_size_gb }}"
+    admin_username: "{{ vm_admin_username }}"
+    ssh_password_enabled: false
+    ssh_public_keys:
+      - path: "/home/{{ vm_admin_username }}/.ssh/authorized_keys"
+        key_data: "{{ ssh_key_data }}"
+    network_interfaces:
+      - "{{ nic_name }}"
+    image: "{{ vm_image }}"
+    boot_diagnostics:
+      enabled: "{{ enable_boot_diagnostics | default(true) }}"
+    tags: "{{ resource_tags | combine({'AutoShutdown': auto_shutdown_enabled | default(false) | string}) }}"
+  register: vm_created
+
+- name: Enable system-assigned managed identity
+  command: >
+    az vm identity assign
+    --resource-group {{ azure_resource_group }}
+    --name {{ vm_name }}
+  when: enable_managed_identity | default(true) | bool
+
+- name: Wait for VM to be accessible
+  wait_for:
+    port: 22
+    host: "{{ public_ip.state.ip_address }}"
+    delay: 30
+    timeout: 300
+  when: 
+    - enable_public_ip | default(true) | bool
+    - public_ip.state.ip_address is defined
+
+- name: Get VM public IP for SSH connection test
+  azure.azcollection.azure_rm_publicipaddress_info:
+    name: "{{ public_ip_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: vm_public_ip
+  when: enable_public_ip | default(true) | bool
+
+- name: Temporarily allow SSH from Ansible controller for IP detection
+  azure.azcollection.azure_rm_securitygroup:
+    name: "{{ nsg_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    rules:
+      - name: "AllowSSH_Temp"
+        priority: 100
+        direction: Inbound
+        access: Allow
+        protocol: Tcp
+        source_address_prefix: "*"
+        destination_address_prefix: "*"
+        source_port_range: "*"
+        destination_port_range: "22"
+        description: "Temporary rule for source IP detection"
+    tags: "{{ resource_tags }}"
+
+- name: Detect source IP via SSH connection
+  command: |
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+    {{ vm_admin_username }}@{{ vm_public_ip.publicipaddresses[0].ip_address }} \
+    'echo $SSH_CONNECTION | cut -d" " -f1'
+  register: source_ip_detection
+  retries: 3
+  delay: 10
+  until: source_ip_detection.rc == 0
+  when: 
+    - enable_public_ip | default(true) | bool
+    - vm_public_ip.publicipaddresses[0].ip_address is defined
+
+- name: Set detected source IP
+  set_fact:
+    detected_source_ip: "{{ source_ip_detection.stdout | trim }}"
+  when: source_ip_detection is succeeded
+
+- name: Validate detected IP
+  assert:
+    that:
+      - detected_source_ip is defined
+      - detected_source_ip | ipaddr
+    fail_msg: "Failed to detect valid source IP address"
+  when: source_ip_detection is succeeded
+
+- name: Update NSG to allow SSH only from detected source IP
+  azure.azcollection.azure_rm_securitygroup:
+    name: "{{ nsg_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    rules:
+      - name: "AllowSSH_{{ detected_source_ip | replace('.', '_') }}"
+        priority: 100
+        direction: Inbound
+        access: Allow
+        protocol: Tcp
+        source_address_prefix: "{{ detected_source_ip }}/32"
+        destination_address_prefix: "*"
+        source_port_range: "*"
+        destination_port_range: "22"
+        description: "SSH access from detected source IP"
+    tags: "{{ resource_tags }}"
+  when: detected_source_ip is defined
+
+- name: Add cost management tags
+  command: >
+    az tag create --resource-id 
+    "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ azure_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ vm_name }}"
+    --tags 
+    "CostCenter={{ cost_center | default('IT') }}"
+    "Project={{ project_name | default('Infrastructure') }}"
+    "Owner={{ owner_email | default(lookup('env', 'USER') + '@company.com') }}"
+    "CreatedDate={{ ansible_date_time.date }}"
+    "Purpose={{ vm_purpose | default('General') }}"
+  when: enable_cost_tags | default(true) | bool
+
+- name: Configure auto-shutdown if requested
+  azure.azcollection.azure_rm_autoshutdownschedule:
+    name: "shutdown-computevm-{{ vm_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    vm_name: "{{ vm_name }}"
+    time: "{{ auto_shutdown_time | default('19:00') }}"
+    time_zone: "{{ auto_shutdown_timezone | default('Eastern Standard Time') }}"
+    notification_settings:
+      status: "{{ auto_shutdown_notification | default('Disabled') }}"
+  when: auto_shutdown_enabled | default(false) | bool
+
+- name: Display VM creation summary
+  debug:
+    msg:
+      - "VM Created Successfully!"
+      - "VM Name: {{ vm_name }}"
+      - "Resource Group: {{ azure_resource_group }}"
+      - "Public IP: {{ vm_public_ip.publicipaddresses[0].ip_address if enable_public_ip | default(true) | bool else 'None' }}"
+      - "SSH Access: Restricted to {{ detected_source_ip }}/32"
+      - "SSH Command: ssh {{ vm_admin_username }}@{{ vm_public_ip.publicipaddresses[0].ip_address if enable_public_ip | default(true) | bool else 'Use private IP' }}"

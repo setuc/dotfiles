@@ -1,0 +1,112 @@
+---
+# tasks/validate.yml - Input validation and prerequisites checking
+#
+# This task file validates all required variables, checks Azure CLI installation
+# and authentication, and ensures SSH keys exist or generates them.
+
+- name: Validate Azure CLI is installed
+  command: az --version
+  register: az_version
+  changed_when: false
+  failed_when: az_version.rc != 0
+
+- name: Check Azure authentication
+  command: az account show
+  register: az_account
+  changed_when: false
+  failed_when: az_account.rc != 0
+
+- name: Set Azure subscription if provided
+  command: az account set --subscription "{{ azure_subscription_id }}"
+  when: azure_subscription_id is defined and azure_subscription_id != ""
+  changed_when: false
+
+- name: Validate required variables
+  assert:
+    that:
+      - azure_resource_group is defined
+      - azure_resource_group != ""
+      - vm_name is defined
+      - vm_name != ""
+      - azure_region is defined
+      - azure_region != ""
+      - vm_admin_username is defined
+      - vm_admin_username != ""
+    fail_msg: "Required variables are missing. Please define: azure_resource_group, vm_name, azure_region, vm_admin_username"
+
+- name: Validate VM size
+  assert:
+    that:
+      - vm_size is defined
+      - vm_size != ""
+    fail_msg: "VM size must be specified"
+
+- name: Check if SSH key exists
+  stat:
+    path: "{{ lookup('env', 'HOME') }}/.ssh/id_rsa.pub"
+  register: ssh_key_file
+  when: ssh_key_data is not defined or ssh_key_data == ""
+
+- name: Generate SSH key pair if not exists
+  openssh_keypair:
+    path: "{{ lookup('env', 'HOME') }}/.ssh/id_rsa"
+    type: rsa
+    size: 4096
+    comment: "{{ vm_admin_username }}@{{ vm_name }}"
+  when: 
+    - generate_ssh_key | default(false) | bool or (ssh_key_data is not defined or ssh_key_data == "")
+    - ssh_key_file is defined and not ssh_key_file.stat.exists
+
+- name: Read SSH public key
+  set_fact:
+    ssh_key_data: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_rsa.pub') }}"
+  when: ssh_key_data is not defined or ssh_key_data == ""
+
+- name: Validate SSH key data
+  assert:
+    that:
+      - ssh_key_data is defined
+      - ssh_key_data != ""
+    fail_msg: "SSH public key data is required but not found"
+
+- name: Check if resource group exists
+  command: az group show --name "{{ azure_resource_group }}"
+  register: rg_check
+  changed_when: false
+  failed_when: false
+
+- name: Set resource group exists fact
+  set_fact:
+    resource_group_exists: "{{ rg_check.rc == 0 }}"
+
+- name: Validate Azure region
+  command: az account list-locations --query "[?name=='{{ azure_region }}'].name" -o tsv
+  register: location_check
+  changed_when: false
+  failed_when: location_check.stdout == ""
+
+- name: Display validation summary
+  debug:
+    msg:
+      - "Azure CLI Version: {{ az_version.stdout_lines[0] }}"
+      - "Resource Group: {{ azure_resource_group }} (exists: {{ resource_group_exists }})"
+      - "VM Name: {{ vm_name }}"
+      - "Region: {{ azure_region }}"
+      - "Admin Username: {{ vm_admin_username }}"
+      - "VM Size: {{ vm_size }}"
+      - "SSH Key Available: Yes"
+
+- name: Validate network configuration
+  assert:
+    that:
+      - vnet_address_prefix | default('10.0.0.0/16') | ipaddr('network')
+      - subnet_address_prefix | default('10.0.1.0/24') | ipaddr('network')
+    fail_msg: "Invalid network configuration. Please check vnet_address_prefix and subnet_address_prefix"
+
+- name: Set default resource naming
+  set_fact:
+    vnet_name: "{{ vnet_name | default(vm_name + '-vnet') }}"
+    subnet_name: "{{ subnet_name | default(vm_name + '-subnet') }}"
+    nsg_name: "{{ nsg_name | default(vm_name + '-nsg') }}"
+    public_ip_name: "{{ public_ip_name | default(vm_name + '-ip') }}"
+    nic_name: "{{ nic_name | default(vm_name + '-nic') }}"

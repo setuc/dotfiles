@@ -1,0 +1,205 @@
+---
+# tasks/cleanup.yml - Cleanup and removal tasks
+#
+# This task file handles cleanup operations including VM deletion,
+# resource cleanup, and cost optimization.
+
+- name: Confirm cleanup operation
+  pause:
+    prompt: "Are you sure you want to delete VM '{{ vm_name }}' and its resources? (yes/no)"
+  register: cleanup_confirmation
+  when: require_cleanup_confirmation | default(true) | bool
+
+- name: Abort if not confirmed
+  fail:
+    msg: "Cleanup operation cancelled by user"
+  when: 
+    - require_cleanup_confirmation | default(true) | bool
+    - cleanup_confirmation.user_input | lower != 'yes'
+
+- name: Get VM details before deletion
+  azure.azcollection.azure_rm_virtualmachine_info:
+    name: "{{ vm_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: vm_details
+  failed_when: false
+
+- name: Stop VM if running
+  azure.azcollection.azure_rm_virtualmachine:
+    name: "{{ vm_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    started: no
+  when: 
+    - vm_details.vms is defined
+    - vm_details.vms | length > 0
+    - vm_details.vms[0].power_state == 'running'
+
+- name: Delete VM
+  azure.azcollection.azure_rm_virtualmachine:
+    name: "{{ vm_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    state: absent
+    remove_on_absent:
+      - all
+  when: delete_vm | default(true) | bool
+
+- name: Delete network interface
+  azure.azcollection.azure_rm_networkinterface:
+    name: "{{ nic_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    state: absent
+  when: delete_network_resources | default(true) | bool
+
+- name: Delete public IP
+  azure.azcollection.azure_rm_publicipaddress:
+    name: "{{ public_ip_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    state: absent
+  when: 
+    - delete_network_resources | default(true) | bool
+    - enable_public_ip | default(true) | bool
+
+- name: Delete network security group
+  azure.azcollection.azure_rm_securitygroup:
+    name: "{{ nsg_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    state: absent
+  when: 
+    - delete_network_resources | default(true) | bool
+    - not keep_nsg | default(false) | bool
+
+- name: Check if other resources exist in subnet
+  command: >
+    az network vnet subnet show
+    --name {{ subnet_name }}
+    --vnet-name {{ vnet_name }}
+    --resource-group {{ azure_resource_group }}
+    --query "ipConfigurations[].id" -o tsv
+  register: subnet_resources
+  failed_when: false
+  when: delete_network_resources | default(true) | bool
+
+- name: Delete subnet if empty
+  azure.azcollection.azure_rm_subnet:
+    name: "{{ subnet_name }}"
+    virtual_network: "{{ vnet_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    state: absent
+  when: 
+    - delete_network_resources | default(true) | bool
+    - subnet_resources.stdout == ""
+    - not keep_vnet | default(false) | bool
+
+- name: Check if other subnets exist in VNet
+  command: >
+    az network vnet subnet list
+    --vnet-name {{ vnet_name }}
+    --resource-group {{ azure_resource_group }}
+    --query "[].name" -o tsv
+  register: vnet_subnets
+  failed_when: false
+  when: delete_network_resources | default(true) | bool
+
+- name: Delete VNet if empty
+  azure.azcollection.azure_rm_virtualnetwork:
+    name: "{{ vnet_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    state: absent
+  when: 
+    - delete_network_resources | default(true) | bool
+    - vnet_subnets.stdout_lines | length <= 1
+    - not keep_vnet | default(false) | bool
+
+- name: Delete OS disk
+  azure.azcollection.azure_rm_manageddisk:
+    name: "{{ vm_name }}_OsDisk"
+    resource_group: "{{ azure_resource_group }}"
+    state: absent
+  when: delete_disks | default(true) | bool
+  failed_when: false
+
+- name: Delete data disks
+  azure.azcollection.azure_rm_manageddisk:
+    name: "{{ item }}"
+    resource_group: "{{ azure_resource_group }}"
+    state: absent
+  loop: "{{ data_disk_names | default([]) }}"
+  when: 
+    - delete_disks | default(true) | bool
+    - data_disk_names is defined
+
+- name: Remove VM from backup if configured
+  command: >
+    az backup protection delete
+    --vault-name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+    --resource-group {{ azure_resource_group }}
+    --container-name {{ 'iaasvmcontainer;iaasvmcontainerv2;' + azure_resource_group + ';' + vm_name }}
+    --item-name {{ 'vm;iaasvmcontainerv2;' + azure_resource_group + ';' + vm_name }}
+    --delete-backup-data {{ 'true' if delete_backup_data | default(false) | bool else 'false' }}
+  when: 
+    - remove_from_backup | default(true) | bool
+    - enable_backup | default(false) | bool
+  failed_when: false
+
+- name: Delete resource group if empty
+  block:
+    - name: Check remaining resources in resource group
+      command: >
+        az resource list
+        --resource-group {{ azure_resource_group }}
+        --query "[].name" -o tsv
+      register: remaining_resources
+
+    - name: Delete resource group if empty
+      azure.azcollection.azure_rm_resourcegroup:
+        name: "{{ azure_resource_group }}"
+        state: absent
+      when: remaining_resources.stdout == ""
+  when: delete_empty_resource_group | default(false) | bool
+
+- name: Clean up local SSH config
+  block:
+    - name: Remove SSH config file
+      file:
+        path: "{{ lookup('env', 'HOME') }}/.ssh/config.d/{{ vm_name }}.conf"
+        state: absent
+      delegate_to: localhost
+
+    - name: Remove from known_hosts
+      known_hosts:
+        name: "{{ vm_public_ip | default(vm_private_ip) }}"
+        state: absent
+      delegate_to: localhost
+      when: vm_public_ip is defined or vm_private_ip is defined
+  when: cleanup_local_config | default(true) | bool
+
+- name: Generate cleanup report
+  copy:
+    content: |
+      VM Cleanup Report
+      ================
+      Timestamp: {{ ansible_date_time.iso8601 }}
+      VM Name: {{ vm_name }}
+      Resource Group: {{ azure_resource_group }}
+      
+      Resources Deleted:
+      - Virtual Machine: {{ 'Yes' if delete_vm | default(true) | bool else 'No' }}
+      - Network Interface: {{ 'Yes' if delete_network_resources | default(true) | bool else 'No' }}
+      - Public IP: {{ 'Yes' if delete_network_resources | default(true) | bool and enable_public_ip | default(true) | bool else 'No' }}
+      - Network Security Group: {{ 'Yes' if delete_network_resources | default(true) | bool and not keep_nsg | default(false) | bool else 'No' }}
+      - OS Disk: {{ 'Yes' if delete_disks | default(true) | bool else 'No' }}
+      - Backup Data: {{ 'Yes' if delete_backup_data | default(false) | bool else 'No' }}
+      
+      Resources Retained:
+      - VNet: {{ 'Yes' if keep_vnet | default(false) | bool else 'No' }}
+      - NSG: {{ 'Yes' if keep_nsg | default(false) | bool else 'No' }}
+      - Resource Group: {{ 'Yes' if not delete_empty_resource_group | default(false) | bool else 'Deleted if empty' }}
+    dest: "/tmp/{{ vm_name }}_cleanup_report_{{ ansible_date_time.epoch }}.txt"
+  delegate_to: localhost
+
+- name: Display cleanup summary
+  debug:
+    msg:
+      - "Cleanup completed successfully!"
+      - "VM '{{ vm_name }}' and associated resources have been removed"
+      - "Cleanup report saved to: /tmp/{{ vm_name }}_cleanup_report_{{ ansible_date_time.epoch }}.txt"

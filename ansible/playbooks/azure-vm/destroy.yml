@@ -1,0 +1,135 @@
+---
+# destroy.yml - Destroy Azure VM and associated resources
+#
+# This playbook safely destroys an Azure VM and all its associated resources.
+# It requires explicit confirmation to prevent accidental deletion.
+#
+# Required variables:
+#   - vm_name: Name of the VM to destroy
+#   - confirm_destroy: Must be set to 'yes' for safety
+#
+# Optional variables:
+#   - resource_group: Resource group name (default: rg-{vm_name})
+#   - delete_resource_group: Delete entire resource group (default: false)
+
+- name: Destroy Azure Virtual Machine
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  
+  vars:
+    resource_group: "rg-{{ vm_name }}"
+    delete_resource_group: false
+    confirm_destroy: "no"
+    
+  pre_tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - vm_name is defined
+          - vm_name | length > 0
+        fail_msg: "VM name is required. Use --name <name>"
+        
+    - name: Confirm destruction
+      assert:
+        that:
+          - confirm_destroy | lower == 'yes'
+        fail_msg: "Destruction not confirmed. Set confirm_destroy=yes or use --confirm flag"
+        
+    - name: Load VM configuration if exists
+      include_vars:
+        file: "{{ lookup('env', 'AZVM_CONFIG_PATH', lookup('env', 'HOME') + '/.config/azvm') }}/{{ vm_name }}.yml"
+        name: vm_config
+      failed_when: false
+      
+  tasks:
+    - name: Get VM information
+      azure.azcollection.azure_rm_virtualmachine_info:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "{{ vm_name }}"
+      register: vm_info
+      failed_when: false
+      
+    - name: Display VM to be destroyed
+      debug:
+        msg:
+          - "WARNING: About to destroy VM and associated resources"
+          - "VM Name: {{ vm_name }}"
+          - "Resource Group: {{ vm_config.resource_group | default(resource_group) }}"
+          - "Found: {{ 'Yes' if vm_info.vms | length > 0 else 'No' }}"
+      
+    - name: Remove VM from inventory
+      lineinfile:
+        path: "{{ lookup('env', 'AZVM_INVENTORY_PATH', 'ansible/inventory/azure') }}/vms.yml"
+        regexp: "^{{ vm_name }}\\s+"
+        state: absent
+      failed_when: false
+      
+    - name: Delete virtual machine
+      azure.azcollection.azure_rm_virtualmachine:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "{{ vm_name }}"
+        state: absent
+        remove_on_absent:
+          - all_autocreated
+      when: vm_info.vms | length > 0
+      register: vm_delete_result
+      
+    - name: Delete network interface
+      azure.azcollection.azure_rm_networkinterface:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "nic-{{ vm_name }}"
+        state: absent
+      failed_when: false
+      
+    - name: Delete public IP address
+      azure.azcollection.azure_rm_publicipaddress:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "pip-{{ vm_name }}"
+        state: absent
+      failed_when: false
+      
+    - name: Delete network security group
+      azure.azcollection.azure_rm_securitygroup:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "nsg-{{ vm_name }}"
+        state: absent
+      failed_when: false
+      
+    - name: Delete subnet
+      azure.azcollection.azure_rm_subnet:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        virtual_network: "vnet-{{ vm_name }}"
+        name: "subnet-{{ vm_name }}"
+        state: absent
+      failed_when: false
+      
+    - name: Delete virtual network
+      azure.azcollection.azure_rm_virtualnetwork:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "vnet-{{ vm_name }}"
+        state: absent
+      failed_when: false
+      
+    - name: Delete entire resource group
+      azure.azcollection.azure_rm_resourcegroup:
+        name: "{{ vm_config.resource_group | default(resource_group) }}"
+        state: absent
+        force_delete_nonempty: true
+      when: delete_resource_group | bool
+      register: rg_delete_result
+      
+    - name: Remove VM configuration file
+      file:
+        path: "{{ lookup('env', 'AZVM_CONFIG_PATH', lookup('env', 'HOME') + '/.config/azvm') }}/{{ vm_name }}.yml"
+        state: absent
+      failed_when: false
+      
+  post_tasks:
+    - name: Display destruction summary
+      debug:
+        msg:
+          - "VM Destruction Complete!"
+          - "VM Name: {{ vm_name }}"
+          - "Resource Group: {{ 'Deleted' if delete_resource_group else 'Preserved' }}"
+          - "Status: {{ 'Success' if vm_delete_result is not skipped else 'VM not found' }}"

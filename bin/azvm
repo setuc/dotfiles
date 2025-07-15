@@ -1,0 +1,416 @@
+#!/usr/bin/env bash
+#
+# azvm - Azure VM Automation Wrapper
+# 
+# This script provides a unified interface for managing Azure VMs through Ansible.
+# It wraps various Ansible playbooks for creating, managing, and setting up VMs.
+#
+# Environment Variables:
+#   AZVM_ANSIBLE_PATH     - Path to Ansible directory (default: $HOME/.dotfiles/ansible)
+#   AZVM_INVENTORY_PATH   - Path to inventory directory (default: $AZVM_ANSIBLE_PATH/inventory/azure)
+#   AZVM_PLAYBOOK_PATH    - Path to playbooks directory (default: $AZVM_ANSIBLE_PATH/playbooks/azure-vm)
+#   AZVM_CONFIG_PATH      - Path to configuration files (default: $HOME/.config/azvm)
+#   AZURE_SUBSCRIPTION_ID - Azure subscription ID (required for operations)
+
+set -euo pipefail
+
+# Script metadata
+readonly SCRIPT_NAME="azvm"
+readonly VERSION="1.0.0"
+
+# Default paths (can be overridden by environment variables)
+AZVM_ANSIBLE_PATH="${AZVM_ANSIBLE_PATH:-$HOME/.dotfiles/ansible}"
+AZVM_INVENTORY_PATH="${AZVM_INVENTORY_PATH:-$AZVM_ANSIBLE_PATH/inventory/azure}"
+AZVM_PLAYBOOK_PATH="${AZVM_PLAYBOOK_PATH:-$AZVM_ANSIBLE_PATH/playbooks/azure-vm}"
+AZVM_CONFIG_PATH="${AZVM_CONFIG_PATH:-$HOME/.config/azvm}"
+
+# Color codes for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[0;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
+
+# Helper functions
+error() {
+    echo -e "${RED}ERROR:${NC} $*" >&2
+}
+
+warning() {
+    echo -e "${YELLOW}WARNING:${NC} $*" >&2
+}
+
+info() {
+    echo -e "${BLUE}INFO:${NC} $*"
+}
+
+success() {
+    echo -e "${GREEN}SUCCESS:${NC} $*"
+}
+
+usage() {
+    cat << EOF
+Usage: $SCRIPT_NAME <command> [options]
+
+Azure VM Automation Tool - Manage Azure VMs with Ansible
+
+Commands:
+    create      Create a new Azure VM
+    manage      Manage existing Azure VMs (start/stop/restart)
+    setup       Configure and provision VMs
+    list        List all managed VMs
+    destroy     Destroy Azure VMs
+    help        Show this help message
+
+Options:
+    -h, --help              Show help for specific command
+    -v, --verbose           Enable verbose output
+    -d, --dry-run          Run in check mode (no changes)
+    -i, --inventory <file>  Override inventory file
+    -e, --extra-vars <vars> Extra variables for Ansible
+    -t, --tags <tags>       Only run plays and tasks tagged with these values
+    -l, --limit <hosts>     Limit selected hosts to pattern
+
+Environment Variables:
+    AZVM_ANSIBLE_PATH       Path to Ansible directory
+    AZVM_INVENTORY_PATH     Path to inventory directory
+    AZVM_PLAYBOOK_PATH      Path to playbooks directory
+    AZVM_CONFIG_PATH        Path to configuration files
+    AZURE_SUBSCRIPTION_ID   Azure subscription ID
+
+Examples:
+    # Create a new VM
+    $SCRIPT_NAME create --name myvm --size Standard_B2s --region eastus
+
+    # Start an existing VM
+    $SCRIPT_NAME manage --action start --name myvm
+
+    # Setup and configure a VM
+    $SCRIPT_NAME setup --name myvm --roles webserver,database
+
+    # List all VMs
+    $SCRIPT_NAME list
+
+    # Destroy a VM
+    $SCRIPT_NAME destroy --name myvm --confirm
+
+Version: $VERSION
+EOF
+}
+
+# Check dependencies
+check_dependencies() {
+    local deps=("ansible" "ansible-playbook" "az")
+    
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" &> /dev/null; then
+            error "Required dependency '$dep' not found. Please install it first."
+            exit 1
+        fi
+    done
+}
+
+# Check if required files exist
+check_paths() {
+    if [[ ! -d "$AZVM_ANSIBLE_PATH" ]]; then
+        error "Ansible path not found: $AZVM_ANSIBLE_PATH"
+        exit 1
+    fi
+    
+    if [[ ! -d "$AZVM_PLAYBOOK_PATH" ]]; then
+        error "Playbook path not found: $AZVM_PLAYBOOK_PATH"
+        exit 1
+    fi
+}
+
+# Create command handler
+handle_create() {
+    local ansible_args=()
+    local extra_vars=""
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                echo "Usage: $SCRIPT_NAME create [options]"
+                echo ""
+                echo "Create a new Azure VM"
+                echo ""
+                echo "Options:"
+                echo "  --name <name>           VM name (required)"
+                echo "  --size <size>           VM size (default: Standard_B2s)"
+                echo "  --region <region>       Azure region (default: eastus)"
+                echo "  --image <image>         OS image (default: Ubuntu 22.04)"
+                echo "  --resource-group <rg>   Resource group name"
+                echo "  --ssh-key <path>        SSH public key path"
+                return 0
+                ;;
+            --name)
+                extra_vars="${extra_vars} vm_name=$2"
+                shift 2
+                ;;
+            --size)
+                extra_vars="${extra_vars} vm_size=$2"
+                shift 2
+                ;;
+            --region)
+                extra_vars="${extra_vars} azure_region=$2"
+                shift 2
+                ;;
+            --image)
+                extra_vars="${extra_vars} vm_image=$2"
+                shift 2
+                ;;
+            --resource-group)
+                extra_vars="${extra_vars} resource_group=$2"
+                shift 2
+                ;;
+            --ssh-key)
+                extra_vars="${extra_vars} ssh_public_key_path=$2"
+                shift 2
+                ;;
+            *)
+                ansible_args+=("$1")
+                shift
+                ;;
+        esac
+    done
+    
+    info "Creating Azure VM..."
+    ansible-playbook "$AZVM_PLAYBOOK_PATH/create.yml" \
+        -i "$AZVM_INVENTORY_PATH/vms.yml" \
+        -e "$extra_vars" \
+        "${ansible_args[@]}"
+}
+
+# Manage command handler
+handle_manage() {
+    local ansible_args=()
+    local extra_vars=""
+    local action=""
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                echo "Usage: $SCRIPT_NAME manage [options]"
+                echo ""
+                echo "Manage existing Azure VMs"
+                echo ""
+                echo "Options:"
+                echo "  --action <action>       Action: start|stop|restart|status (required)"
+                echo "  --name <name>           VM name (required)"
+                echo "  --wait                  Wait for operation to complete"
+                return 0
+                ;;
+            --action)
+                action="$2"
+                extra_vars="${extra_vars} vm_action=$2"
+                shift 2
+                ;;
+            --name)
+                extra_vars="${extra_vars} vm_name=$2"
+                shift 2
+                ;;
+            --wait)
+                extra_vars="${extra_vars} wait_for_completion=true"
+                shift
+                ;;
+            *)
+                ansible_args+=("$1")
+                shift
+                ;;
+        esac
+    done
+    
+    if [[ -z "$action" ]]; then
+        error "Action is required. Use --action <start|stop|restart|status>"
+        exit 1
+    fi
+    
+    info "Managing Azure VM (action: $action)..."
+    ansible-playbook "$AZVM_PLAYBOOK_PATH/manage.yml" \
+        -i "$AZVM_INVENTORY_PATH/vms.yml" \
+        -e "$extra_vars" \
+        "${ansible_args[@]}"
+}
+
+# Setup command handler
+handle_setup() {
+    local ansible_args=()
+    local extra_vars=""
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                echo "Usage: $SCRIPT_NAME setup [options]"
+                echo ""
+                echo "Setup and configure Azure VMs"
+                echo ""
+                echo "Options:"
+                echo "  --name <name>           VM name (required)"
+                echo "  --roles <roles>         Comma-separated list of roles"
+                echo "  --playbook <playbook>   Custom playbook to run"
+                return 0
+                ;;
+            --name)
+                extra_vars="${extra_vars} vm_name=$2"
+                shift 2
+                ;;
+            --roles)
+                extra_vars="${extra_vars} vm_roles=$2"
+                shift 2
+                ;;
+            --playbook)
+                # Allow custom playbook
+                shift 2
+                ;;
+            *)
+                ansible_args+=("$1")
+                shift
+                ;;
+        esac
+    done
+    
+    info "Setting up Azure VM..."
+    ansible-playbook "$AZVM_PLAYBOOK_PATH/setup.yml" \
+        -i "$AZVM_INVENTORY_PATH/vms.yml" \
+        -e "$extra_vars" \
+        "${ansible_args[@]}"
+}
+
+# List command handler
+handle_list() {
+    info "Listing Azure VMs..."
+    ansible-inventory -i "$AZVM_INVENTORY_PATH/vms.yml" --list
+}
+
+# Destroy command handler
+handle_destroy() {
+    local confirm=false
+    local extra_vars=""
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                echo "Usage: $SCRIPT_NAME destroy [options]"
+                echo ""
+                echo "Destroy Azure VMs"
+                echo ""
+                echo "Options:"
+                echo "  --name <name>           VM name (required)"
+                echo "  --confirm               Confirm destruction"
+                return 0
+                ;;
+            --name)
+                extra_vars="${extra_vars} vm_name=$2"
+                shift 2
+                ;;
+            --confirm)
+                confirm=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    if [[ "$confirm" != "true" ]]; then
+        error "Destruction requires --confirm flag for safety"
+        exit 1
+    fi
+    
+    warning "Destroying Azure VM..."
+    ansible-playbook "$AZVM_PLAYBOOK_PATH/destroy.yml" \
+        -i "$AZVM_INVENTORY_PATH/vms.yml" \
+        -e "$extra_vars"
+}
+
+# Main function
+main() {
+    # Check if no arguments provided
+    if [[ $# -eq 0 ]]; then
+        usage
+        exit 0
+    fi
+    
+    # Check dependencies
+    check_dependencies
+    check_paths
+    
+    # Parse global options
+    local command=""
+    local global_args=()
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            -v|--verbose)
+                global_args+=("-vv")
+                shift
+                ;;
+            -d|--dry-run)
+                global_args+=("--check")
+                shift
+                ;;
+            -i|--inventory)
+                AZVM_INVENTORY_PATH="$2"
+                shift 2
+                ;;
+            -e|--extra-vars)
+                global_args+=("-e" "$2")
+                shift 2
+                ;;
+            -t|--tags)
+                global_args+=("--tags" "$2")
+                shift 2
+                ;;
+            -l|--limit)
+                global_args+=("--limit" "$2")
+                shift 2
+                ;;
+            create|manage|setup|list|destroy|help)
+                command="$1"
+                shift
+                break
+                ;;
+            *)
+                error "Unknown option: $1"
+                usage
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Execute command
+    case $command in
+        create)
+            handle_create "$@" "${global_args[@]}"
+            ;;
+        manage)
+            handle_manage "$@" "${global_args[@]}"
+            ;;
+        setup)
+            handle_setup "$@" "${global_args[@]}"
+            ;;
+        list)
+            handle_list "$@" "${global_args[@]}"
+            ;;
+        destroy)
+            handle_destroy "$@" "${global_args[@]}"
+            ;;
+        help)
+            usage
+            ;;
+        *)
+            error "Unknown command: $command"
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function
+main "$@"

@@ -1,0 +1,7 @@
+---
+# tasks/manage-vm.yml - Wrapper for VM lifecycle management
+#
+# This file includes the main manage.yml task file for VM state management
+
+- name: Include VM management tasks
+  include_tasks: manage.yml

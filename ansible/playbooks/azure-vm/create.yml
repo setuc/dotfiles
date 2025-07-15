@@ -1,0 +1,170 @@
+---
+# create.yml - Create Azure VM
+#
+# This playbook creates a new Azure VM with the specified configuration.
+# It handles resource group creation, networking setup, and VM provisioning.
+#
+# Required variables:
+#   - vm_name: Name of the VM to create
+#   - azure_region: Azure region for deployment
+#
+# Optional variables:
+#   - vm_size: VM size (default: Standard_B2s)
+#   - vm_image: OS image (default: Ubuntu 22.04)
+#   - resource_group: Resource group name (default: rg-{vm_name})
+#   - ssh_public_key_path: Path to SSH public key
+
+- name: Create Azure Virtual Machine
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  
+  vars:
+    # Default values - can be overridden
+    vm_size: "Standard_B2s"
+    azure_region: "eastus"
+    vm_image:
+      offer: "0001-com-ubuntu-server-jammy"
+      publisher: "Canonical"
+      sku: "22_04-lts-gen2"
+      version: "latest"
+    resource_group: "rg-{{ vm_name }}"
+    admin_username: "azureuser"
+    ssh_public_key_path: "{{ lookup('env', 'HOME') }}/.ssh/id_rsa.pub"
+    
+  pre_tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - vm_name is defined
+          - vm_name | length > 0
+        fail_msg: "VM name is required. Use --name <name>"
+        
+    - name: Check if SSH key exists
+      stat:
+        path: "{{ ssh_public_key_path }}"
+      register: ssh_key_stat
+      
+    - name: Fail if SSH key not found
+      fail:
+        msg: "SSH public key not found at {{ ssh_public_key_path }}"
+      when: not ssh_key_stat.stat.exists
+      
+  tasks:
+    - name: Create resource group
+      azure.azcollection.azure_rm_resourcegroup:
+        name: "{{ resource_group }}"
+        location: "{{ azure_region }}"
+        state: present
+      register: rg_result
+      
+    - name: Create virtual network
+      azure.azcollection.azure_rm_virtualnetwork:
+        resource_group: "{{ resource_group }}"
+        name: "vnet-{{ vm_name }}"
+        address_prefixes:
+          - "10.0.0.0/16"
+        state: present
+      register: vnet_result
+      
+    - name: Create subnet
+      azure.azcollection.azure_rm_subnet:
+        resource_group: "{{ resource_group }}"
+        virtual_network: "vnet-{{ vm_name }}"
+        name: "subnet-{{ vm_name }}"
+        address_prefix: "10.0.1.0/24"
+        state: present
+      register: subnet_result
+      
+    - name: Create public IP address
+      azure.azcollection.azure_rm_publicipaddress:
+        resource_group: "{{ resource_group }}"
+        name: "pip-{{ vm_name }}"
+        allocation_method: Static
+        sku: Standard
+        state: present
+      register: pip_result
+      
+    - name: Create network security group
+      azure.azcollection.azure_rm_securitygroup:
+        resource_group: "{{ resource_group }}"
+        name: "nsg-{{ vm_name }}"
+        rules:
+          - name: SSH
+            protocol: Tcp
+            destination_port_range: 22
+            access: Allow
+            priority: 100
+            direction: Inbound
+          - name: HTTP
+            protocol: Tcp
+            destination_port_range: 80
+            access: Allow
+            priority: 101
+            direction: Inbound
+          - name: HTTPS
+            protocol: Tcp
+            destination_port_range: 443
+            access: Allow
+            priority: 102
+            direction: Inbound
+        state: present
+      register: nsg_result
+      
+    - name: Create network interface
+      azure.azcollection.azure_rm_networkinterface:
+        resource_group: "{{ resource_group }}"
+        name: "nic-{{ vm_name }}"
+        virtual_network: "vnet-{{ vm_name }}"
+        subnet: "subnet-{{ vm_name }}"
+        public_ip_name: "pip-{{ vm_name }}"
+        security_group: "nsg-{{ vm_name }}"
+        state: present
+      register: nic_result
+      
+    - name: Create virtual machine
+      azure.azcollection.azure_rm_virtualmachine:
+        resource_group: "{{ resource_group }}"
+        name: "{{ vm_name }}"
+        vm_size: "{{ vm_size }}"
+        managed_disk_type: Standard_LRS
+        admin_username: "{{ admin_username }}"
+        ssh_password_enabled: false
+        ssh_public_keys:
+          - path: "/home/{{ admin_username }}/.ssh/authorized_keys"
+            key_data: "{{ lookup('file', ssh_public_key_path) }}"
+        network_interfaces: "nic-{{ vm_name }}"
+        image: "{{ vm_image }}"
+        state: present
+      register: vm_result
+      
+    - name: Add VM to inventory
+      lineinfile:
+        path: "{{ lookup('env', 'AZVM_INVENTORY_PATH', 'ansible/inventory/azure') }}/vms.yml"
+        line: "{{ vm_name }} ansible_host={{ pip_result.state.ip_address }} ansible_user={{ admin_username }}"
+        create: yes
+        state: present
+        
+    - name: Display VM information
+      debug:
+        msg:
+          - "VM Created Successfully!"
+          - "Name: {{ vm_name }}"
+          - "Public IP: {{ pip_result.state.ip_address }}"
+          - "SSH: ssh {{ admin_username }}@{{ pip_result.state.ip_address }}"
+          - "Resource Group: {{ resource_group }}"
+          - "Region: {{ azure_region }}"
+          
+  post_tasks:
+    - name: Save VM metadata
+      copy:
+        content: |
+          vm_name: {{ vm_name }}
+          resource_group: {{ resource_group }}
+          region: {{ azure_region }}
+          public_ip: {{ pip_result.state.ip_address }}
+          admin_user: {{ admin_username }}
+          created_at: {{ ansible_date_time.iso8601 }}
+        dest: "{{ lookup('env', 'AZVM_CONFIG_PATH', lookup('env', 'HOME') + '/.config/azvm') }}/{{ vm_name }}.yml"
+        mode: '0644'
+      delegate_to: localhost

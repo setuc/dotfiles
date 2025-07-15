@@ -1,0 +1,7 @@
+---
+# tasks/create-vm.yml - Wrapper for VM creation
+#
+# This file includes the main create.yml task file for VM creation
+
+- name: Include VM creation tasks
+  include_tasks: create.yml

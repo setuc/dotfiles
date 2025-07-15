@@ -1,0 +1,63 @@
+# {{ ansible_managed }}
+# Fail2ban configuration for {{ vm_name }}
+
+[DEFAULT]
+# Ban IP for 1 hour after 3 failed attempts
+bantime = 3600
+findtime = 600
+maxretry = 3
+banaction = iptables-multiport
+backend = systemd
+
+# Email notifications (optional)
+destemail = {{ fail2ban_email | default('root@localhost') }}
+sendername = Fail2ban-{{ vm_name }}
+mta = sendmail
+
+[sshd]
+enabled = true
+port = 22
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = 3
+bantime = 3600
+
+# Aggressive mode for repeat offenders
+[sshd-aggressive]
+enabled = true
+port = 22
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = 2
+bantime = 86400  # 24 hours
+findtime = 86400
+# Ban IP that has been banned 3 times already
+banaction = iptables-allports
+            iptables-ipset-proto6-allports
+
+[sshd-ddos]
+enabled = true
+port = 22
+filter = sshd-ddos
+logpath = /var/log/auth.log
+maxretry = 10
+findtime = 60
+bantime = 600
+
+# Protect against port scanning
+[portscan]
+enabled = true
+filter = portscan
+logpath = /var/log/syslog
+maxretry = 6
+bantime = 7200
+
+# Custom filter for Azure-specific threats
+[azure-auth]
+enabled = true
+port = 22
+filter = azure-auth
+logpath = /var/log/auth.log
+maxretry = 3
+findtime = 300
+bantime = 3600

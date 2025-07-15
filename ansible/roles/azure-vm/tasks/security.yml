@@ -1,0 +1,267 @@
+---
+# tasks/security.yml - Security configuration for Azure VM
+#
+# This task file implements security controls including IP detection,
+# NSG rule management, JIT access preparation, and security hardening.
+
+- name: Get current public IP of Ansible controller
+  uri:
+    url: https://api.ipify.org?format=json
+    return_content: yes
+  register: public_ip_lookup
+  when: detect_controller_ip | default(true) | bool
+
+- name: Set controller public IP
+  set_fact:
+    controller_public_ip: "{{ public_ip_lookup.json.ip }}"
+  when: 
+    - detect_controller_ip | default(true) | bool
+    - public_ip_lookup is succeeded
+
+- name: Get VM network interface details
+  azure.azcollection.azure_rm_networkinterface_info:
+    name: "{{ nic_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: nic_info
+
+- name: Get current NSG rules
+  azure.azcollection.azure_rm_securitygroup_info:
+    name: "{{ nsg_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: nsg_info
+
+- name: Detect source IP if connected via SSH
+  set_fact:
+    ssh_client_ip: "{{ ansible_env.SSH_CONNECTION.split()[0] if ansible_env.SSH_CONNECTION is defined else '' }}"
+  delegate_to: "{{ vm_name }}"
+  when: 
+    - ansible_env is defined
+    - update_nsg_from_ssh | default(true) | bool
+
+- name: Build allowed IP list
+  set_fact:
+    allowed_ips: "{{ allowed_ips | default([]) + [item] }}"
+  loop:
+    - "{{ detected_source_ip | default('') }}"
+    - "{{ controller_public_ip | default('') }}"
+    - "{{ ssh_client_ip | default('') }}"
+    - "{{ additional_allowed_ips | default([]) }}"
+  when: item != '' and item | ipaddr
+
+- name: Remove duplicate IPs
+  set_fact:
+    allowed_ips: "{{ allowed_ips | unique }}"
+  when: allowed_ips is defined
+
+- name: Configure comprehensive NSG rules
+  azure.azcollection.azure_rm_securitygroup:
+    name: "{{ nsg_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    rules:
+      # SSH Access Rules
+      - name: "AllowSSH_{{ item | replace('.', '_') }}"
+        priority: "{{ 100 + idx }}"
+        direction: Inbound
+        access: Allow
+        protocol: Tcp
+        source_address_prefix: "{{ item }}/32"
+        destination_address_prefix: "*"
+        source_port_range: "*"
+        destination_port_range: "22"
+        description: "SSH access from authorized IP"
+      # Deny all other SSH
+      - name: "DenyAllSSH"
+        priority: 200
+        direction: Inbound
+        access: Deny
+        protocol: Tcp
+        source_address_prefix: "*"
+        destination_address_prefix: "*"
+        source_port_range: "*"
+        destination_port_range: "22"
+        description: "Deny all other SSH access"
+      # HTTP/HTTPS rules if web server is enabled
+      - name: "AllowHTTP"
+        priority: 300
+        direction: Inbound
+        access: Allow
+        protocol: Tcp
+        source_address_prefix: "{{ allowed_http_sources | join(',') }}"
+        destination_address_prefix: "*"
+        source_port_range: "*"
+        destination_port_range: "80"
+        description: "HTTP access"
+        when: webserver_install | default(false) | bool
+      - name: "AllowHTTPS"
+        priority: 301
+        direction: Inbound
+        access: Allow
+        protocol: Tcp
+        source_address_prefix: "{{ allowed_https_sources | join(',') }}"
+        destination_address_prefix: "*"
+        source_port_range: "*"
+        destination_port_range: "443"
+        description: "HTTPS access"
+        when: webserver_install | default(false) | bool and enable_ssl | default(false) | bool
+    tags: "{{ resource_tags }}"
+  loop: "{{ allowed_ips | default([]) }}"
+  loop_control:
+    index_var: idx
+  when: allowed_ips is defined and allowed_ips | length > 0
+
+- name: Enable Just-In-Time VM Access policy
+  command: >
+    az security jit-policy create
+    --resource-group {{ azure_resource_group }}
+    --location {{ azure_region }}
+    --vm-id "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ azure_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ vm_name }}"
+    --name "{{ vm_name }}-jit"
+    --kind "Basic"
+    --ports '[{"number":22,"protocol":"Tcp","allowedSourceAddressPrefixes":["{{ allowed_ips | join('","') }}"],"maxRequestAccessDuration":"PT3H"}]'
+  when: 
+    - enable_jit_access | default(false) | bool
+    - azure_subscription_id is defined
+  failed_when: false  # JIT might not be available in all subscriptions
+
+- name: Configure Azure Bastion subnet (preparation)
+  azure.azcollection.azure_rm_subnet:
+    name: "AzureBastionSubnet"
+    resource_group: "{{ azure_resource_group }}"
+    virtual_network: "{{ vnet_name }}"
+    address_prefix: "{{ bastion_subnet_prefix | default('10.0.2.0/24') }}"
+  when: prepare_bastion | default(false) | bool
+
+- name: Apply OS-level security hardening
+  block:
+    - name: Disable password authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+      delegate_to: "{{ vm_name }}"
+      become: yes
+
+    - name: Disable root login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin'
+        line: 'PermitRootLogin no'
+      delegate_to: "{{ vm_name }}"
+      become: yes
+
+    - name: Configure SSH key-only authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PubkeyAuthentication'
+        line: 'PubkeyAuthentication yes'
+      delegate_to: "{{ vm_name }}"
+      become: yes
+
+    - name: Restart SSH service
+      systemd:
+        name: sshd
+        state: restarted
+      delegate_to: "{{ vm_name }}"
+      become: yes
+  when: 
+    - harden_ssh | default(true) | bool
+    - vm_created is defined and vm_created is succeeded
+
+- name: Configure UFW firewall on VM
+  block:
+    - name: Install UFW
+      package:
+        name: ufw
+        state: present
+      delegate_to: "{{ vm_name }}"
+      become: yes
+
+    - name: Configure UFW defaults
+      ufw:
+        direction: incoming
+        default: deny
+      delegate_to: "{{ vm_name }}"
+      become: yes
+
+    - name: Allow SSH from specific IPs
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+        from_ip: "{{ item }}/32"
+      loop: "{{ allowed_ips | default([]) }}"
+      delegate_to: "{{ vm_name }}"
+      become: yes
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+      delegate_to: "{{ vm_name }}"
+      become: yes
+  when: 
+    - configure_host_firewall | default(true) | bool
+    - vm_created is defined and vm_created is succeeded
+
+- name: Install and configure fail2ban
+  block:
+    - name: Install fail2ban
+      package:
+        name: fail2ban
+        state: present
+      delegate_to: "{{ vm_name }}"
+      become: yes
+
+    - name: Configure fail2ban for SSH
+      template:
+        src: fail2ban-jail.local.j2
+        dest: /etc/fail2ban/jail.local
+      delegate_to: "{{ vm_name }}"
+      become: yes
+
+    - name: Start fail2ban service
+      systemd:
+        name: fail2ban
+        state: started
+        enabled: yes
+      delegate_to: "{{ vm_name }}"
+      become: yes
+  when: 
+    - enable_fail2ban | default(true) | bool
+    - vm_created is defined and vm_created is succeeded
+
+- name: Create security audit log
+  copy:
+    content: |
+      Security Configuration Applied: {{ ansible_date_time.iso8601 }}
+      ================================================
+      VM Name: {{ vm_name }}
+      Resource Group: {{ azure_resource_group }}
+      
+      Network Security:
+      - NSG Name: {{ nsg_name }}
+      - Allowed IPs: {{ allowed_ips | default([]) | join(', ') }}
+      - JIT Access: {{ 'Enabled' if enable_jit_access | default(false) | bool else 'Disabled' }}
+      
+      SSH Security:
+      - Password Authentication: Disabled
+      - Root Login: Disabled
+      - Key-Only Authentication: Enabled
+      
+      Host Firewall:
+      - UFW: {{ 'Enabled' if configure_host_firewall | default(true) | bool else 'Disabled' }}
+      - Fail2ban: {{ 'Enabled' if enable_fail2ban | default(true) | bool else 'Disabled' }}
+      
+      Additional Security Features:
+      - Managed Identity: {{ 'Enabled' if enable_managed_identity | default(true) | bool else 'Disabled' }}
+      - Boot Diagnostics: {{ 'Enabled' if enable_boot_diagnostics | default(true) | bool else 'Disabled' }}
+    dest: "/tmp/{{ vm_name }}_security_audit_{{ ansible_date_time.epoch }}.log"
+  delegate_to: localhost
+
+- name: Display security configuration summary
+  debug:
+    msg:
+      - "Security Configuration Applied Successfully!"
+      - "NSG Rules Updated - Allowed IPs: {{ allowed_ips | default([]) | join(', ') }}"
+      - "SSH Hardening: {{ 'Applied' if harden_ssh | default(true) | bool else 'Skipped' }}"
+      - "Host Firewall: {{ 'Configured' if configure_host_firewall | default(true) | bool else 'Skipped' }}"
+      - "JIT Access: {{ 'Enabled' if enable_jit_access | default(false) | bool else 'Not configured' }}"

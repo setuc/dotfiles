@@ -1,0 +1,280 @@
+---
+# tasks/configure.yml - Post-creation configuration
+#
+# This task file handles post-creation configuration including SSH config updates,
+# connectivity testing, managed identity configuration, and auto-shutdown setup.
+
+- name: Get VM details
+  azure.azcollection.azure_rm_virtualmachine_info:
+    name: "{{ vm_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: vm_info
+
+- name: Get public IP details
+  azure.azcollection.azure_rm_publicipaddress_info:
+    name: "{{ public_ip_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: public_ip_info
+  when: enable_public_ip | default(true) | bool
+
+- name: Set VM connection details
+  set_fact:
+    vm_public_ip: "{{ public_ip_info.publicipaddresses[0].ip_address }}"
+    vm_private_ip: "{{ vm_info.vms[0].network_profile.network_interfaces[0].primary_ip_configuration.private_ip_address }}"
+  when: public_ip_info.publicipaddresses is defined
+
+- name: Create SSH config directory
+  file:
+    path: "{{ lookup('env', 'HOME') }}/.ssh/config.d"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+
+- name: Generate SSH config entry
+  template:
+    src: ssh_config.j2
+    dest: "{{ lookup('env', 'HOME') }}/.ssh/config.d/{{ vm_name }}.conf"
+    mode: '0600'
+  delegate_to: localhost
+
+- name: Update main SSH config to include config.d
+  blockinfile:
+    path: "{{ lookup('env', 'HOME') }}/.ssh/config"
+    create: yes
+    mode: '0600'
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Include config.d"
+    block: |
+      Include config.d/*.conf
+  delegate_to: localhost
+
+- name: Test SSH connectivity
+  command: |
+    ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+    {{ vm_admin_username }}@{{ vm_public_ip }} echo "SSH connection successful"
+  register: ssh_test
+  retries: 3
+  delay: 10
+  until: ssh_test.rc == 0
+  delegate_to: localhost
+  when: enable_public_ip | default(true) | bool
+
+- name: Add VM to Ansible inventory
+  add_host:
+    name: "{{ vm_name }}"
+    groups: 
+      - azure_vms
+      - "{{ vm_purpose | default('general') }}_vms"
+    ansible_host: "{{ vm_public_ip if enable_public_ip | default(true) | bool else vm_private_ip }}"
+    ansible_user: "{{ vm_admin_username }}"
+    ansible_ssh_private_key_file: "{{ ssh_private_key_file | default('~/.ssh/id_rsa') }}"
+    ansible_python_interpreter: /usr/bin/python3
+
+- name: Wait for VM to be ready for configuration
+  wait_for_connection:
+    timeout: 300
+  delegate_to: "{{ vm_name }}"
+
+- name: Gather facts from the new VM
+  setup:
+  delegate_to: "{{ vm_name }}"
+
+- name: Configure system hostname
+  hostname:
+    name: "{{ vm_name }}"
+  delegate_to: "{{ vm_name }}"
+  become: yes
+
+- name: Update package cache
+  package:
+    update_cache: yes
+  delegate_to: "{{ vm_name }}"
+  become: yes
+  when: update_packages_on_boot | default(true) | bool
+
+- name: Install base packages
+  package:
+    name: "{{ base_packages }}"
+    state: present
+  delegate_to: "{{ vm_name }}"
+  become: yes
+  when: base_packages is defined
+
+- name: Configure managed identity extension
+  command: >
+    az vm extension set
+    --resource-group {{ azure_resource_group }}
+    --vm-name {{ vm_name }}
+    --name ManagedIdentityExtensionForLinux
+    --publisher Microsoft.ManagedIdentity
+    --version 1.0
+    --settings '{"port": 50342}'
+  when: 
+    - enable_managed_identity | default(true) | bool
+    - ansible_os_family == "Debian"
+
+- name: Install Azure CLI on VM
+  block:
+    - name: Download Azure CLI installation script
+      get_url:
+        url: https://aka.ms/InstallAzureCLIDeb
+        dest: /tmp/install_azure_cli.sh
+        mode: '0755'
+      delegate_to: "{{ vm_name }}"
+
+    - name: Install Azure CLI
+      command: /tmp/install_azure_cli.sh
+      delegate_to: "{{ vm_name }}"
+      become: yes
+      args:
+        creates: /usr/bin/az
+  when: install_azure_cli | default(true) | bool
+
+- name: Configure auto-shutdown schedule
+  azure.azcollection.azure_rm_autoshutdownschedule:
+    name: "shutdown-computevm-{{ vm_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    vm_name: "{{ vm_name }}"
+    time: "{{ auto_shutdown_time | default('19:00') }}"
+    time_zone: "{{ auto_shutdown_timezone | default('Eastern Standard Time') }}"
+    notification_settings:
+      status: "{{ 'Enabled' if auto_shutdown_notification_email is defined else 'Disabled' }}"
+      email: "{{ auto_shutdown_notification_email | default('') }}"
+      webhook_url: "{{ auto_shutdown_webhook_url | default('') }}"
+      time_in_minutes: "{{ auto_shutdown_notification_time | default(30) }}"
+  when: auto_shutdown_enabled | default(false) | bool
+
+- name: Configure system monitoring
+  block:
+    - name: Install monitoring agent
+      command: >
+        az vm extension set
+        --resource-group {{ azure_resource_group }}
+        --vm-name {{ vm_name }}
+        --name OmsAgentForLinux
+        --publisher Microsoft.EnterpriseCloud.Monitoring
+        --version 1.13
+        --settings '{"workspaceId": "{{ log_analytics_workspace_id }}"}'
+        --protected-settings '{"workspaceKey": "{{ log_analytics_workspace_key }}"}'
+      when: 
+        - log_analytics_workspace_id is defined
+        - log_analytics_workspace_key is defined
+
+    - name: Install dependency agent
+      command: >
+        az vm extension set
+        --resource-group {{ azure_resource_group }}
+        --vm-name {{ vm_name }}
+        --name DependencyAgentLinux
+        --publisher Microsoft.Azure.Monitoring.DependencyAgent
+        --version 9.10
+      when: enable_dependency_agent | default(false) | bool
+  when: enable_monitoring | default(false) | bool
+
+- name: Configure VM backup
+  block:
+    - name: Get recovery services vault
+      command: >
+        az backup vault list
+        --resource-group {{ azure_resource_group }}
+        --query "[?name=='{{ backup_vault_name | default(azure_resource_group + '-vault') }}'].name"
+        -o tsv
+      register: vault_check
+      failed_when: false
+
+    - name: Create recovery services vault if not exists
+      command: >
+        az backup vault create
+        --resource-group {{ azure_resource_group }}
+        --name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+        --location {{ azure_region }}
+      when: vault_check.stdout == ""
+
+    - name: Enable VM backup
+      command: >
+        az backup protection enable-for-vm
+        --resource-group {{ azure_resource_group }}
+        --vault-name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+        --vm {{ vm_name }}
+        --policy-name {{ backup_policy_name | default('DefaultPolicy') }}
+  when: enable_backup | default(false) | bool
+
+- name: Configure swap file
+  block:
+    - name: Check if swap exists
+      command: swapon --show
+      register: swap_check
+      delegate_to: "{{ vm_name }}"
+      become: yes
+      failed_when: false
+
+    - name: Create swap file
+      command: |
+        fallocate -l {{ swap_size | default('2G') }} /swapfile
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+      delegate_to: "{{ vm_name }}"
+      become: yes
+      when: swap_check.stdout == ""
+
+    - name: Make swap permanent
+      lineinfile:
+        path: /etc/fstab
+        line: '/swapfile none swap sw 0 0'
+        create: yes
+      delegate_to: "{{ vm_name }}"
+      become: yes
+      when: swap_check.stdout == ""
+  when: configure_swap | default(true) | bool
+
+- name: Set up log rotation
+  copy:
+    content: |
+      /var/log/{{ vm_name }}/*.log {
+          daily
+          rotate 7
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 0644 root root
+      }
+    dest: /etc/logrotate.d/{{ vm_name }}
+  delegate_to: "{{ vm_name }}"
+  become: yes
+
+- name: Create VM information file
+  copy:
+    content: |
+      VM Information
+      ==============
+      VM Name: {{ vm_name }}
+      Resource Group: {{ azure_resource_group }}
+      Location: {{ azure_region }}
+      VM Size: {{ vm_size }}
+      Public IP: {{ vm_public_ip | default('N/A') }}
+      Private IP: {{ vm_private_ip }}
+      Admin User: {{ vm_admin_username }}
+      Created: {{ ansible_date_time.iso8601 }}
+      
+      SSH Access:
+      ssh {{ vm_admin_username }}@{{ vm_public_ip if enable_public_ip | default(true) | bool else vm_private_ip }}
+      
+      Or use the configured alias:
+      ssh {{ vm_name }}
+      
+      Auto-shutdown: {{ 'Enabled at ' + auto_shutdown_time if auto_shutdown_enabled | default(false) | bool else 'Disabled' }}
+      Backup: {{ 'Enabled' if enable_backup | default(false) | bool else 'Disabled' }}
+      Monitoring: {{ 'Enabled' if enable_monitoring | default(false) | bool else 'Disabled' }}
+    dest: "{{ lookup('env', 'HOME') }}/azure-vm-{{ vm_name }}-info.txt"
+  delegate_to: localhost
+
+- name: Display configuration summary
+  debug:
+    msg:
+      - "VM Configuration Completed!"
+      - "VM: {{ vm_name }} ({{ vm_public_ip | default(vm_private_ip) }})"
+      - "SSH: ssh {{ vm_name }} (alias configured)"
+      - "Packages installed: {{ base_packages | length }} packages"
+      - "Azure CLI: {{ 'Installed' if install_azure_cli | default(true) | bool else 'Not installed' }}"
+      - "Auto-shutdown: {{ 'Configured for ' + auto_shutdown_time if auto_shutdown_enabled | default(false) | bool else 'Not configured' }}"

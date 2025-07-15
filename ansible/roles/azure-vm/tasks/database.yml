@@ -1,0 +1,190 @@
+---
+# tasks/database.yml - Install and configure database server
+#
+# This task file sets up either PostgreSQL or MySQL based on configuration.
+
+- name: Install PostgreSQL
+  block:
+    - name: Install PostgreSQL packages
+      package:
+        name:
+          - postgresql
+          - postgresql-contrib
+          - postgresql-client
+          - python3-psycopg2
+        state: present
+      notify: restart postgresql
+
+    - name: Ensure PostgreSQL is started and enabled
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Configure PostgreSQL authentication
+      lineinfile:
+        path: "/etc/postgresql/{{ postgresql_version | default('14') }}/main/postgresql.conf"
+        regexp: "^#?listen_addresses"
+        line: "listen_addresses = '*'"
+      notify: restart postgresql
+
+    - name: Configure PostgreSQL host-based authentication
+      blockinfile:
+        path: "/etc/postgresql/{{ postgresql_version | default('14') }}/main/pg_hba.conf"
+        block: |
+          # Allow connections from Azure VNet
+          host    all             all             10.0.0.0/16            md5
+          # Allow connections from specific IPs
+          {% for ip in database_allowed_ips | default([]) %}
+          host    all             all             {{ ip }}/32            md5
+          {% endfor %}
+      notify: restart postgresql
+
+    - name: Create database user
+      postgresql_user:
+        name: "{{ database_user | default('dbuser') }}"
+        password: "{{ database_password | default(database_root_password) }}"
+        role_attr_flags: CREATEDB
+      become: true
+      become_user: postgres
+
+    - name: Create application database
+      postgresql_db:
+        name: "{{ database_name | default('appdb') }}"
+        owner: "{{ database_user | default('dbuser') }}"
+      become: true
+      become_user: postgres
+
+  when: database_type | default('postgresql') == 'postgresql'
+
+- name: Install MySQL/MariaDB
+  block:
+    - name: Install MySQL packages
+      package:
+        name:
+          - mysql-server
+          - mysql-client
+          - python3-pymysql
+        state: present
+      notify: restart mysql
+
+    - name: Ensure MySQL is started and enabled
+      service:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: Set MySQL root password
+      mysql_user:
+        name: root
+        password: "{{ database_root_password }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        host: localhost
+      when: database_root_password is defined
+
+    - name: Configure MySQL to listen on all interfaces
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: "^bind-address"
+        line: "bind-address = 0.0.0.0"
+      notify: restart mysql
+
+    - name: Create database user
+      mysql_user:
+        name: "{{ database_user | default('dbuser') }}"
+        password: "{{ database_password | default(database_root_password) }}"
+        priv: "*.*:ALL"
+        host: "%"
+        login_user: root
+        login_password: "{{ database_root_password }}"
+      when: database_root_password is defined
+
+    - name: Create application database
+      mysql_db:
+        name: "{{ database_name | default('appdb') }}"
+        login_user: root
+        login_password: "{{ database_root_password }}"
+      when: database_root_password is defined
+
+  when: database_type | default('postgresql') == 'mysql'
+
+- name: Configure database firewall rules
+  ufw:
+    rule: allow
+    port: "{{ database_port }}"
+    proto: tcp
+    src: "{{ item }}"
+  loop: "{{ database_allowed_sources | default(['10.0.0.0/16']) }}"
+  when: firewall_enabled | default(true) | bool
+
+- name: Setup database backup
+  block:
+    - name: Create backup directory
+      file:
+        path: /var/backups/database
+        state: directory
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Create backup script
+      template:
+        src: database-backup.sh.j2
+        dest: /usr/local/bin/database-backup
+        mode: '0750'
+        owner: root
+        group: root
+
+    - name: Setup backup cron job
+      cron:
+        name: "Database backup"
+        hour: "{{ database_backup_hour | default('2') }}"
+        minute: "{{ database_backup_minute | default('0') }}"
+        job: "/usr/local/bin/database-backup"
+        user: root
+
+  when: database_backup_enabled | default(false) | bool
+
+- name: Configure database monitoring
+  block:
+    - name: Install monitoring tools
+      package:
+        name:
+          - htop
+          - iotop
+          - pg_activity  # For PostgreSQL
+        state: present
+      when: database_type | default('postgresql') == 'postgresql'
+
+    - name: Create monitoring script
+      copy:
+        content: |
+          #!/bin/bash
+          # Database health check
+          
+          if [[ "{{ database_type | default('postgresql') }}" == "postgresql" ]]; then
+              sudo -u postgres psql -c "SELECT 1" > /dev/null 2>&1
+          else
+              mysqladmin -uroot -p{{ database_root_password }} ping > /dev/null 2>&1
+          fi
+          
+          if [ $? -eq 0 ]; then
+              echo "Database is healthy"
+              exit 0
+          else
+              echo "Database is not responding"
+              exit 1
+          fi
+        dest: /usr/local/bin/check-database
+        mode: '0755'
+
+  when: enable_monitoring | default(false) | bool
+
+- name: Display database connection info
+  debug:
+    msg:
+      - "Database Type: {{ database_type | default('postgresql') }}"
+      - "Database Port: {{ database_port }}"
+      - "Database Name: {{ database_name | default('appdb') }}"
+      - "Database User: {{ database_user | default('dbuser') }}"
+      - "Connection String: {{ database_type | default('postgresql') }}://{{ database_user | default('dbuser') }}:****@{{ ansible_default_ipv4.address }}:{{ database_port }}/{{ database_name | default('appdb') }}"
