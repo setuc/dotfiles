@@ -1,0 +1,32 @@
+#!/bin/bash
+#
+# azvm-simple - Azure VM automation using your CLI script
+#
+
+set -euo pipefail
+
+# Source your original script as a function
+source "$(dirname "$0")/azvm-create-function.sh"
+
+# Parse the command
+case "${1:-}" in
+    create)
+        shift
+        handle_create "$@"
+        ;;
+    --help|-h)
+        echo "Usage: $0 create [options]"
+        echo ""
+        echo "Azure VM automation tool"
+        echo ""
+        echo "Commands:"
+        echo "  create    Create a new Azure VM"
+        echo ""
+        echo "Use '$0 create --help' for create options"
+        ;;
+    *)
+        echo "Usage: $0 create [options]"
+        echo "Use '$0 --help' for more information"
+        exit 1
+        ;;
+esac

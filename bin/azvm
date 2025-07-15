@@ -56,6 +56,7 @@ Azure VM Automation Tool - Manage Azure VMs with Ansible
 
 Commands:
     create      Create a new Azure VM
+    delete      Delete an Azure VM and its resources
     manage      Manage existing Azure VMs (start/stop/restart)
     setup       Configure and provision VMs
     list        List all managed VMs
@@ -125,61 +126,18 @@ check_paths() {
 
 # Create command handler
 handle_create() {
-    local ansible_args=()
-    local extra_vars=""
+    info "Creating Azure VM using Azure CLI..."
     
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -h|--help)
-                echo "Usage: $SCRIPT_NAME create [options]"
-                echo ""
-                echo "Create a new Azure VM"
-                echo ""
-                echo "Options:"
-                echo "  --name <name>           VM name (required)"
-                echo "  --size <size>           VM size (default: Standard_B2s)"
-                echo "  --region <region>       Azure region (default: eastus)"
-                echo "  --image <image>         OS image (default: Ubuntu 22.04)"
-                echo "  --resource-group <rg>   Resource group name"
-                echo "  --ssh-key <path>        SSH public key path"
-                return 0
-                ;;
-            --name)
-                extra_vars="${extra_vars} vm_name=$2"
-                shift 2
-                ;;
-            --size)
-                extra_vars="${extra_vars} vm_size=$2"
-                shift 2
-                ;;
-            --region)
-                extra_vars="${extra_vars} azure_region=$2"
-                shift 2
-                ;;
-            --image)
-                extra_vars="${extra_vars} vm_image=$2"
-                shift 2
-                ;;
-            --resource-group)
-                extra_vars="${extra_vars} resource_group=$2"
-                shift 2
-                ;;
-            --ssh-key)
-                extra_vars="${extra_vars} ssh_public_key_path=$2"
-                shift 2
-                ;;
-            *)
-                ansible_args+=("$1")
-                shift
-                ;;
-        esac
-    done
+    # Call the working azvm-working script
+    exec "$(dirname "$0")/azvm-working" create "$@"
+}
+
+# Delete command handler
+handle_delete() {
+    info "Deleting Azure VM using Azure CLI..."
     
-    info "Creating Azure VM..."
-    ansible-playbook "$AZVM_PLAYBOOK_PATH/create.yml" \
-        -i "$AZVM_INVENTORY_PATH/vms.yml" \
-        -e "$extra_vars" \
-        "${ansible_args[@]}"
+    # Call the working azvm-working script
+    exec "$(dirname "$0")/azvm-working" delete "$@"
 }
 
 # Manage command handler
@@ -371,7 +329,7 @@ main() {
                 global_args+=("--limit" "$2")
                 shift 2
                 ;;
-            create|manage|setup|list|destroy|help)
+            create|delete|manage|setup|list|destroy|help)
                 command="$1"
                 shift
                 break
@@ -388,6 +346,9 @@ main() {
     case $command in
         create)
             handle_create "$@" "${global_args[@]}"
+            ;;
+        delete)
+            handle_delete "$@" "${global_args[@]}"
             ;;
         manage)
             handle_manage "$@" "${global_args[@]}"
