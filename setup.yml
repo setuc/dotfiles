@@ -46,6 +46,12 @@
         state: directory
         mode: "0755"
 
+    - name: Ensure unzip is installed for oh-my-posh
+      become: true
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+
     - name: Run custom install commands
       ansible.builtin.shell: "{{ item.value.custom_install }}"
       args:
