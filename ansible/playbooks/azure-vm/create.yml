@@ -30,7 +30,7 @@
       version: "latest"
     resource_group: "rg-{{ vm_name }}"
     admin_username: "azureuser"
-    ssh_public_key_path: "{{ lookup('env', 'HOME') }}/.ssh/id_rsa.pub"
+    ssh_public_key_path: "{{ lookup('env', 'HOME') }}/.ssh/id_ed25519.pub"
     
   pre_tasks:
     - name: Validate required variables

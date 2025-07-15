@@ -5,7 +5,7 @@ Host {{ vm_name }}
     HostName {{ vm_public_ip if enable_public_ip | default(true) | bool else vm_private_ip }}
     User {{ vm_admin_username }}
     Port 22
-    IdentityFile {{ ssh_private_key_file | default('~/.ssh/id_rsa') }}
+    IdentityFile {{ ssh_private_key_file | default('~/.ssh/id_ed25519') }}
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
     ServerAliveInterval 60
@@ -20,4 +20,4 @@ Host {{ vm_name }}-azure
     HostName {{ vm_public_ip if enable_public_ip | default(true) | bool else vm_private_ip }}
     User {{ vm_admin_username }}
     Port 22
-    IdentityFile {{ ssh_private_key_file | default('~/.ssh/id_rsa') }}
+    IdentityFile {{ ssh_private_key_file | default('~/.ssh/id_ed25519') }}

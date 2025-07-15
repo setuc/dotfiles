@@ -39,6 +39,11 @@
       ansible.builtin.pip:
         requirements: "{{ dotfiles_dir }}/requirements.txt"
         extra_args: --break-system-packages
+        
+    - name: Install Azure Ansible collection
+      ansible.builtin.shell: ansible-galaxy collection install azure.azcollection
+      args:
+        creates: "{{ ansible_env.HOME }}/.ansible/collections/ansible_collections/azure/azcollection"
 
     - name: Ensure ~/bin directory exists
       ansible.builtin.file:

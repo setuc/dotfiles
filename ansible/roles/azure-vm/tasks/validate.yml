@@ -49,9 +49,8 @@
 
 - name: Generate SSH key pair if not exists
   openssh_keypair:
-    path: "{{ lookup('env', 'HOME') }}/.ssh/id_rsa"
-    type: rsa
-    size: 4096
+    path: "{{ lookup('env', 'HOME') }}/.ssh/id_ed25519"
+    type: ed25519
     comment: "{{ vm_admin_username }}@{{ vm_name }}"
   when: 
     - generate_ssh_key | default(false) | bool or (ssh_key_data is not defined or ssh_key_data == "")
