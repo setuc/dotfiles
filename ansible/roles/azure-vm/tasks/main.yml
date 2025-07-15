@@ -28,7 +28,7 @@
     - prerequisites
 
 - name: Create Azure VM
-  include_tasks: create-vm.yml
+  include_tasks: create-minimal.yml
   when: azure_vm_operation | default('') == 'create'
   tags:
     - create

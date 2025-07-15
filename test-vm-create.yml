@@ -1,0 +1,27 @@
+---
+- name: Test VM Creation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ lookup('env', 'HOME') }}/.azvm-venv/bin/python"
+    vm_name: "test-vm"
+    vm_size: "Standard_B2s"
+    azure_region: "eastus"
+    vm_admin_username: "azureuser"
+    ssh_key_data: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}"
+    vm_image:
+      offer: "0001-com-ubuntu-server-jammy"
+      publisher: "Canonical"
+      sku: "22_04-lts-gen2"
+      version: "latest"
+      
+  tasks:
+    - name: Create resource group
+      azure.azcollection.azure_rm_resourcegroup:
+        name: "{{ vm_name }}-rg"
+        location: "{{ azure_region }}"
+        tags:
+          purpose: "vm-automation"
+          created_by: "azvm"
+          vm_name: "{{ vm_name }}"
