@@ -18,8 +18,10 @@
   hosts: localhost
   connection: local
   gather_facts: true
-  
   vars:
+    # Python interpreter configuration
+    ansible_python_interpreter: "{{ lookup('env', 'HOME') }}/.azvm-venv/bin/python"
+    
     # Default values - can be overridden
     vm_size: "Standard_B2s"
     azure_region: "eastus"

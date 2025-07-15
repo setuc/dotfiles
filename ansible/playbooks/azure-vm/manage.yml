@@ -18,6 +18,8 @@
   gather_facts: false
   
   vars:
+    # Python interpreter configuration
+    ansible_python_interpreter: "{{ lookup('env', 'HOME') }}/.azvm-venv/bin/python"
     resource_group: "rg-{{ vm_name }}"
     wait_for_completion: true
     

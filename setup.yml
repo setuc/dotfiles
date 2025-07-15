@@ -34,7 +34,32 @@
         executable: /bin/bash
       when: azure_cli_check.rc != 0
 
-    - name: Install Python requirements
+    - name: Install available Azure system packages
+      become: true
+      ansible.builtin.apt:
+        name:
+          - python3-azure
+          - python3-msrest
+          - python3-msrestazure
+          - python3-venv
+        state: present
+        
+    - name: Create Azure automation virtual environment
+      ansible.builtin.command: python3 -m venv {{ ansible_env.HOME }}/.azvm-venv
+      args:
+        creates: "{{ ansible_env.HOME }}/.azvm-venv"
+        
+    - name: Install Azure management packages in venv
+      ansible.builtin.pip:
+        name:
+          - azure-mgmt-compute
+          - azure-mgmt-network
+          - azure-mgmt-resource
+          - azure-common
+          - azure-cli-core
+        virtualenv: "{{ ansible_env.HOME }}/.azvm-venv"
+        
+    - name: Install Python requirements (non-Azure)
       become: true
       ansible.builtin.pip:
         requirements: "{{ dotfiles_dir }}/requirements.txt"

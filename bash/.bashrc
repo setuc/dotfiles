@@ -111,7 +111,7 @@ if ! shopt -oq posix; then
 fi  
   
 # Add local bin to PATH (ensure no duplicates)  
-export PATH="$HOME/bin:$HOME/.local/bin:$PATH"  
+export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.dotfiles/bin:$PATH"  
   
 # Initialize Oh My Posh (if installed)  
 if command -v oh-my-posh &> /dev/null; then  

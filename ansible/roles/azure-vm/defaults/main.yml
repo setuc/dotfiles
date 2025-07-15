@@ -48,6 +48,9 @@ prepare_bastion: false
 ssh_key_data: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub', errors='ignore') }}"
 generate_ssh_key: false
 
+# Python Environment Configuration
+ansible_python_interpreter: "{{ lookup('env', 'HOME') }}/.azvm-venv/bin/python"
+
 # Resource Naming Convention
 resource_prefix: ""
 resource_suffix: ""
