@@ -45,7 +45,7 @@ enable_jit_access: false  # Requires Azure Defender
 prepare_bastion: false
 
 # SSH Configuration
-ssh_key_data: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_rsa.pub', errors='ignore') }}"
+ssh_key_data: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub', errors='ignore') }}"
 generate_ssh_key: false
 
 # Resource Naming Convention

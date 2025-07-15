@@ -2,7 +2,7 @@
 alias azl='az login'
 alias azal='az account list -o table'
 alias azrg='az group list -o table'
-alias azvm='az vm list -d -o table'
+alias azvml='az vm list -d -o table'
 alias azaks='az aks list -o table'
 
 # Azure VM Management aliases (requires vm-automation.sh functions)
