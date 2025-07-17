@@ -1,0 +1,110 @@
+# {{ ansible_managed }}
+# Network Security Group Rules for {{ vm_name }}
+# Generated on {{ ansible_date_time.iso8601 }}
+
+rules:
+  # SSH Access - Restricted to specific IPs only
+{% for ip in allowed_ips | default([]) %}
+  - name: "AllowSSH_{{ ip | replace('.', '_') }}"
+    priority: {{ 100 + loop.index0 }}
+    direction: Inbound
+    access: Allow
+    protocol: Tcp
+    source_address_prefix: "{{ ip }}/32"
+    destination_address_prefix: "*"
+    source_port_range: "*"
+    destination_port_range: "22"
+    description: "SSH access from {{ ip }}"
+{% endfor %}
+
+  # Deny all other SSH attempts
+  - name: "DenyAllOtherSSH"
+    priority: 200
+    direction: Inbound
+    access: Deny
+    protocol: Tcp
+    source_address_prefix: "*"
+    destination_address_prefix: "*"
+    source_port_range: "*"
+    destination_port_range: "22"
+    description: "Deny all other SSH access"
+
+{% if webserver_install | default(false) | bool %}
+  # HTTP Access
+  - name: "AllowHTTP"
+    priority: 300
+    direction: Inbound
+    access: Allow
+    protocol: Tcp
+    source_address_prefix: "{{ allowed_http_sources | join(',') }}"
+    destination_address_prefix: "*"
+    source_port_range: "*"
+    destination_port_range: "80"
+    description: "HTTP access"
+{% endif %}
+
+{% if webserver_install | default(false) | bool and enable_ssl | default(false) | bool %}
+  # HTTPS Access
+  - name: "AllowHTTPS"
+    priority: 301
+    direction: Inbound
+    access: Allow
+    protocol: Tcp
+    source_address_prefix: "{{ allowed_https_sources | join(',') }}"
+    destination_address_prefix: "*"
+    source_port_range: "*"
+    destination_port_range: "443"
+    description: "HTTPS access"
+{% endif %}
+
+{% if enable_monitoring | default(false) | bool %}
+  # Azure Monitor
+  - name: "AllowAzureMonitor"
+    priority: 400
+    direction: Outbound
+    access: Allow
+    protocol: "*"
+    source_address_prefix: "*"
+    destination_address_prefix: "AzureMonitor"
+    source_port_range: "*"
+    destination_port_range: "*"
+    description: "Allow Azure Monitor"
+{% endif %}
+
+{% if database_install | default(false) | bool %}
+  # Database Access (restricted to VNet only)
+  - name: "AllowDatabase_VNet"
+    priority: 500
+    direction: Inbound
+    access: Allow
+    protocol: Tcp
+    source_address_prefix: "{{ vnet_address_prefix }}"
+    destination_address_prefix: "*"
+    source_port_range: "*"
+    destination_port_range: "{{ database_port | default('5432') }}"
+    description: "Database access from VNet only"
+{% endif %}
+
+  # Allow outbound internet access
+  - name: "AllowInternetOutbound"
+    priority: 1000
+    direction: Outbound
+    access: Allow
+    protocol: "*"
+    source_address_prefix: "*"
+    destination_address_prefix: "Internet"
+    source_port_range: "*"
+    destination_port_range: "*"
+    description: "Allow outbound internet access"
+
+  # Default deny all inbound (implicit, but listed for clarity)
+  - name: "DenyAllInbound"
+    priority: 4096
+    direction: Inbound
+    access: Deny
+    protocol: "*"
+    source_address_prefix: "*"
+    destination_address_prefix: "*"
+    source_port_range: "*"
+    destination_port_range: "*"
+    description: "Deny all inbound traffic by default"

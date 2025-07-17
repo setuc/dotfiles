@@ -1,0 +1,77 @@
+---
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: azure-vm-test
+    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    capabilities:
+      - SYS_ADMIN
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      azure-vm-test:
+        # Test variables
+        azure_resource_group: test-rg
+        azure_vm_name: test-vm
+        azure_location: eastus
+        azure_vm_size: Standard_B2s
+        azure_admin_username: azureuser
+        
+        # Security settings
+        allowed_ip_addresses:
+          - "192.168.1.0/24"
+          - "10.0.0.0/8"
+        
+        # Mock Azure responses
+        azure_subscription_id: "test-subscription-id"
+        azure_tenant_id: "test-tenant-id"
+        
+        # Testing mode
+        azure_test_mode: true
+        
+  playbooks:
+    converge: ${MOLECULE_PLAYBOOK:-converge.yml}
+    verify: ${MOLECULE_PLAYBOOK:-verify.yml}
+  lint: |
+    set -e
+    yamllint .
+    ansible-lint
+
+scenario:
+  name: default
+  test_sequence:
+    - dependency
+    - lint
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - cleanup
+    - destroy
+
+verifier:
+  name: ansible
+  lint: |
+    set -e
+    ansible-lint verify.yml

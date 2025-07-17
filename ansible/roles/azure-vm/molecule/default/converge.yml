@@ -1,0 +1,80 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: yes
+  become: yes
+  
+  pre_tasks:
+    - name: Install required packages for testing
+      package:
+        name:
+          - python3-pip
+          - python3-dev
+          - gcc
+          - jq
+        state: present
+    
+    - name: Install Azure CLI (mock for testing)
+      shell: |
+        # Create mock az command
+        mkdir -p /usr/local/bin
+        cat > /usr/local/bin/az << 'EOF'
+        #!/bin/bash
+        # Mock Azure CLI for testing
+        case "$1" in
+          "account")
+            if [[ "$2" == "show" ]]; then
+              echo '{"id": "test-subscription-id", "name": "Test Subscription"}'
+            fi
+            ;;
+          "network")
+            if [[ "$2" == "nsg" && "$3" == "rule" ]]; then
+              echo '{"name": "test-rule", "priority": 100}'
+            fi
+            ;;
+          "vm")
+            if [[ "$2" == "show" ]]; then
+              echo '{"name": "test-vm", "powerState": "VM running"}'
+            fi
+            ;;
+          *)
+            echo "Mock response for: az $@"
+            ;;
+        esac
+        EOF
+        chmod +x /usr/local/bin/az
+      changed_when: false
+    
+    - name: Create mock SSH key
+      file:
+        path: /home/{{ azure_admin_username | default('azureuser') }}/.ssh
+        state: directory
+        mode: '0700'
+    
+    - name: Generate mock SSH key
+      command: ssh-keygen -t rsa -b 2048 -f /home/{{ azure_admin_username | default('azureuser') }}/.ssh/id_rsa -N ""
+      args:
+        creates: /home/{{ azure_admin_username | default('azureuser') }}/.ssh/id_rsa
+  
+  roles:
+    - role: azure-vm
+      vars:
+        # Override tasks that require actual Azure connection
+        azure_test_mode: true
+        vm_action: create
+        
+  post_tasks:
+    - name: Create test markers for verification
+      copy:
+        content: "{{ item.content }}"
+        dest: "/tmp/{{ item.file }}"
+      loop:
+        - file: azure_vm_role_executed
+          content: "Role executed successfully"
+        - file: security_rules_applied
+          content: "{{ allowed_ip_addresses | to_json }}"
+        - file: vm_config
+          content: |
+            vm_name: {{ azure_vm_name }}
+            resource_group: {{ azure_resource_group }}
+            location: {{ azure_location }}

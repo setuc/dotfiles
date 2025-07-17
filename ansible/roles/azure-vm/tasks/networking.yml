@@ -1,0 +1,111 @@
+---
+# tasks/networking.yml - Network configuration tasks
+#
+# This task file handles network-related configurations including
+# NSG updates, VNet peering, and network optimizations.
+
+- name: Get current network configuration
+  azure.azcollection.azure_rm_virtualnetwork_info:
+    name: "{{ vnet_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: vnet_info
+
+- name: Get current NSG configuration
+  azure.azcollection.azure_rm_securitygroup_info:
+    name: "{{ nsg_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: nsg_info
+
+- name: Update NSG rules from template
+  azure.azcollection.azure_rm_securitygroup:
+    name: "{{ nsg_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    rules: "{{ lookup('template', 'nsg_rules.j2') | from_yaml | dict2items | selectattr('key', 'equalto', 'rules') | map(attribute='value') | first }}"
+    tags: "{{ resource_tags }}"
+  when: update_nsg_from_template | default(false) | bool
+
+- name: Configure VNet peering if requested
+  azure.azcollection.azure_rm_virtualnetworkpeering:
+    name: "{{ peering_name | default(vnet_name + '-to-' + peer_vnet_name) }}"
+    resource_group: "{{ azure_resource_group }}"
+    virtual_network: "{{ vnet_name }}"
+    remote_virtual_network:
+      resource_group: "{{ peer_resource_group | default(azure_resource_group) }}"
+      name: "{{ peer_vnet_name }}"
+    allow_virtual_network_access: "{{ allow_vnet_access | default(true) }}"
+    allow_forwarded_traffic: "{{ allow_forwarded_traffic | default(false) }}"
+    allow_gateway_transit: "{{ allow_gateway_transit | default(false) }}"
+    use_remote_gateways: "{{ use_remote_gateways | default(false) }}"
+  when: 
+    - configure_peering | default(false) | bool
+    - peer_vnet_name is defined
+
+- name: Configure DNS settings
+  azure.azcollection.azure_rm_virtualnetwork:
+    name: "{{ vnet_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    address_prefixes:
+      - "{{ vnet_address_prefix }}"
+    dns_servers: "{{ custom_dns_servers | default(omit) }}"
+    tags: "{{ resource_tags }}"
+  when: custom_dns_servers is defined
+
+- name: Enable DDoS protection if requested
+  azure.azcollection.azure_rm_virtualnetwork:
+    name: "{{ vnet_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    address_prefixes:
+      - "{{ vnet_address_prefix }}"
+    enable_ddos_protection: "{{ enable_ddos_protection | default(false) }}"
+    tags: "{{ resource_tags }}"
+  when: enable_ddos_protection is defined
+
+- name: Create Application Security Groups
+  azure.azcollection.azure_rm_applicationsecuritygroup:
+    name: "{{ item.name }}"
+    resource_group: "{{ azure_resource_group }}"
+    location: "{{ azure_region }}"
+    tags: "{{ resource_tags | combine(item.tags | default({})) }}"
+  loop: "{{ application_security_groups | default([]) }}"
+  when: application_security_groups is defined
+
+- name: Configure service endpoints
+  azure.azcollection.azure_rm_subnet:
+    name: "{{ subnet_name }}"
+    resource_group: "{{ azure_resource_group }}"
+    virtual_network: "{{ vnet_name }}"
+    address_prefix: "{{ subnet_address_prefix }}"
+    service_endpoints: "{{ service_endpoints | default([]) }}"
+  when: service_endpoints is defined and service_endpoints | length > 0
+
+- name: Configure network watcher
+  command: >
+    az network watcher configure
+    --resource-group {{ azure_resource_group }}
+    --location {{ azure_region }}
+    --enabled true
+  when: enable_network_watcher | default(false) | bool
+
+- name: Create flow logs for NSG
+  command: >
+    az network watcher flow-log create
+    --resource-group {{ azure_resource_group }}
+    --location {{ azure_region }}
+    --name {{ nsg_name }}-flowlog
+    --nsg {{ nsg_name }}
+    --storage-account {{ flow_log_storage_account }}
+    --enabled true
+    --retention 7
+  when: 
+    - enable_flow_logs | default(false) | bool
+    - flow_log_storage_account is defined
+
+- name: Display network configuration summary
+  debug:
+    msg:
+      - "Network Configuration Updated"
+      - "VNet: {{ vnet_name }} ({{ vnet_address_prefix }})"
+      - "Subnet: {{ subnet_name }} ({{ subnet_address_prefix }})"
+      - "NSG: {{ nsg_name }}"
+      - "NSG Rules Count: {{ nsg_info.securitygroups[0].rules | length }}"
+      - "Service Endpoints: {{ service_endpoints | default(['None']) | join(', ') }}"

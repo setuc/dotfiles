@@ -111,7 +111,7 @@ if ! shopt -oq posix; then
 fi  
   
 # Add local bin to PATH (ensure no duplicates)  
-export PATH="$HOME/bin:$HOME/.local/bin:$PATH"  
+export PATH="$HOME/bin:$HOME/.local/bin:$HOME/.dotfiles/bin:$PATH"  
   
 # Initialize Oh My Posh (if installed)  
 if command -v oh-my-posh &> /dev/null; then  
@@ -141,3 +141,7 @@ else
 fi
 unset __conda_setup
 # <<< conda initialize <<<
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion

@@ -1,0 +1,64 @@
+---
+# vms.yml - Azure VM Inventory
+#
+# This file maintains the inventory of Azure VMs managed by the automation.
+# VMs are automatically added when created and removed when destroyed.
+#
+# Format:
+# hostname ansible_host=IP ansible_user=username ansible_ssh_private_key_file=path
+#
+# Groups can be used to organize VMs:
+# [webservers]
+# web1 ansible_host=1.2.3.4
+# web2 ansible_host=1.2.3.5
+#
+# [databases]
+# db1 ansible_host=1.2.3.6
+#
+# Variables can be set per group:
+# [webservers:vars]
+# ansible_user=azureuser
+# ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+
+all:
+  hosts:
+    # VMs will be automatically added here by the create playbook
+    # Example:
+    # myvm:
+    #   ansible_host: 20.XX.XX.XX
+    #   ansible_user: azureuser
+    #   ansible_ssh_private_key_file: ~/.ssh/id_rsa
+    
+  children:
+    # Organize VMs into logical groups
+    azure_vms:
+      hosts:
+        # All Azure-managed VMs
+      vars:
+        ansible_user: azureuser
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+        ansible_python_interpreter: /usr/bin/python3
+        
+    webservers:
+      hosts:
+        # Web server VMs
+        
+    databases:
+      hosts:
+        # Database VMs
+        
+    development:
+      hosts:
+        # Development environment VMs
+        
+    production:
+      hosts:
+        # Production environment VMs
+      vars:
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=yes'
+        
+  vars:
+    # Global variables for all Azure VMs
+    azure_resource_group_prefix: "rg-"
+    azure_vm_default_size: "Standard_B2s"
+    azure_vm_default_region: "eastus"

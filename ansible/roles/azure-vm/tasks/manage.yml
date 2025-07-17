@@ -1,0 +1,280 @@
+---
+# tasks/manage.yml - VM lifecycle management
+#
+# This task file handles VM state management (start/stop/restart/deallocate),
+# IP updates, and Just-In-Time access requests.
+
+- name: Validate management operation
+  assert:
+    that:
+      - vm_operation is defined
+      - vm_operation in ['start', 'stop', 'restart', 'deallocate', 'update-ip', 'jit-request', 'status']
+    fail_msg: "Invalid operation. Must be one of: start, stop, restart, deallocate, update-ip, jit-request, status"
+
+- name: Get current VM status
+  azure.azcollection.azure_rm_virtualmachine_info:
+    name: "{{ vm_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: vm_current_state
+
+- name: Display current VM status
+  debug:
+    msg:
+      - "VM Name: {{ vm_name }}"
+      - "Current State: {{ vm_current_state.vms[0].power_state }}"
+      - "Provisioning State: {{ vm_current_state.vms[0].provisioning_state }}"
+  when: vm_operation == 'status' or display_status | default(true) | bool
+
+# Start VM operation
+- name: Start VM
+  block:
+    - name: Check if VM is already running
+      assert:
+        that:
+          - vm_current_state.vms[0].power_state != 'running'
+        fail_msg: "VM is already running"
+      failed_when: false
+
+    - name: Start the VM
+      azure.azcollection.azure_rm_virtualmachine:
+        name: "{{ vm_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        started: yes
+
+    - name: Wait for VM to be accessible
+      wait_for:
+        port: 22
+        host: "{{ vm_public_ip | default(vm_private_ip) }}"
+        delay: 30
+        timeout: 300
+      when: wait_for_ssh | default(true) | bool
+
+    - name: Update allowed IP if needed
+      include_tasks: update-nsg-ip.yml
+      when: update_ip_on_start | default(true) | bool
+  when: vm_operation == 'start'
+
+# Stop VM operation (VM remains allocated, continues to incur charges)
+- name: Stop VM
+  block:
+    - name: Stop the VM (keep allocated)
+      azure.azcollection.azure_rm_virtualmachine:
+        name: "{{ vm_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        started: no
+      when: keep_allocated | default(true) | bool
+
+    - name: Display stop information
+      debug:
+        msg: "VM stopped but remains allocated. Use 'deallocate' to stop charges."
+  when: vm_operation == 'stop'
+
+# Restart VM operation
+- name: Restart VM
+  block:
+    - name: Restart the VM
+      azure.azcollection.azure_rm_virtualmachine:
+        name: "{{ vm_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        restarted: yes
+
+    - name: Wait for VM to be accessible after restart
+      wait_for:
+        port: 22
+        host: "{{ vm_public_ip | default(vm_private_ip) }}"
+        delay: 30
+        timeout: 300
+      when: wait_for_ssh | default(true) | bool
+  when: vm_operation == 'restart'
+
+# Deallocate VM operation (stops charging for compute)
+- name: Deallocate VM
+  block:
+    - name: Deallocate the VM to stop charges
+      azure.azcollection.azure_rm_virtualmachine:
+        name: "{{ vm_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        allocated: no
+
+    - name: Display deallocation information
+      debug:
+        msg:
+          - "VM deallocated successfully!"
+          - "Compute charges have stopped"
+          - "Storage charges continue for OS and data disks"
+          - "Public IP (if static) continues to incur charges"
+  when: vm_operation == 'deallocate'
+
+# Update allowed IP addresses
+- name: Update allowed IP addresses
+  block:
+    - name: Get current public IP
+      uri:
+        url: https://api.ipify.org?format=json
+        return_content: yes
+      register: current_ip_lookup
+
+    - name: Get current NSG rules
+      azure.azcollection.azure_rm_securitygroup_info:
+        name: "{{ nsg_name }}"
+        resource_group: "{{ azure_resource_group }}"
+      register: current_nsg
+
+    - name: Build new allowed IP list
+      set_fact:
+        new_allowed_ips: "{{ (existing_allowed_ips | default([])) + [current_ip_lookup.json.ip] + (additional_ips | default([])) }}"
+
+    - name: Remove old SSH rules
+      azure.azcollection.azure_rm_securitygroup:
+        name: "{{ nsg_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        rules: "{{ current_nsg.securitygroups[0].rules | rejectattr('name', 'match', '^AllowSSH_.*') | list }}"
+
+    - name: Add updated SSH rules
+      azure.azcollection.azure_rm_securitygroup:
+        name: "{{ nsg_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        rules: "{{ current_nsg.securitygroups[0].rules | rejectattr('name', 'match', '^AllowSSH_.*') | list + new_ssh_rules }}"
+      vars:
+        new_ssh_rules: |
+          {% set rules = [] %}
+          {% for ip in new_allowed_ips | unique %}
+          {% set _ = rules.append({
+            'name': 'AllowSSH_' + ip | replace('.', '_'),
+            'priority': 100 + loop.index0,
+            'direction': 'Inbound',
+            'access': 'Allow',
+            'protocol': 'Tcp',
+            'source_address_prefix': ip + '/32',
+            'destination_address_prefix': '*',
+            'source_port_range': '*',
+            'destination_port_range': '22',
+            'description': 'SSH access from ' + ip
+          }) %}
+          {% endfor %}
+          {{ rules }}
+
+    - name: Display updated IPs
+      debug:
+        msg: "NSG updated with IPs: {{ new_allowed_ips | unique | join(', ') }}"
+  when: vm_operation == 'update-ip'
+
+# JIT Access Request
+- name: Request Just-In-Time access
+  block:
+    - name: Get current user IP
+      uri:
+        url: https://api.ipify.org?format=json
+        return_content: yes
+      register: requester_ip
+
+    - name: Create JIT access request
+      command: >
+        az security jit-policy access-request create
+        --resource-group {{ azure_resource_group }}
+        --location {{ azure_region }}
+        --name "{{ vm_name }}-jit"
+        --virtual-machines 
+        '[{"id": "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ azure_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ vm_name }}",
+        "ports": [{"number": 22, "duration": "PT{{ jit_duration_hours | default(3) }}H", 
+        "allowedSourceAddressPrefixes": ["{{ jit_source_ip | default(requester_ip.json.ip) }}"]}]}]'
+      register: jit_request
+
+    - name: Display JIT request details
+      debug:
+        msg:
+          - "JIT access requested successfully!"
+          - "Duration: {{ jit_duration_hours | default(3) }} hours"
+          - "Source IP: {{ jit_source_ip | default(requester_ip.json.ip) }}"
+          - "Port: 22 (SSH)"
+  when: vm_operation == 'jit-request'
+
+# Cost analysis
+- name: Get VM cost information
+  block:
+    - name: Get VM size pricing
+      uri:
+        url: "https://prices.azure.com/api/retail/prices?$filter=serviceName eq 'Virtual Machines' and armRegionName eq '{{ azure_region }}' and skuName eq '{{ vm_size }}'"
+        return_content: yes
+      register: pricing_info
+
+    - name: Calculate estimated costs
+      set_fact:
+        hourly_cost: "{{ pricing_info.json.Items[0].retailPrice if pricing_info.json.Items else 'N/A' }}"
+        daily_cost: "{{ (pricing_info.json.Items[0].retailPrice * 24) if pricing_info.json.Items else 'N/A' }}"
+        monthly_cost: "{{ (pricing_info.json.Items[0].retailPrice * 24 * 30) if pricing_info.json.Items else 'N/A' }}"
+
+    - name: Display cost information
+      debug:
+        msg:
+          - "VM Size: {{ vm_size }}"
+          - "Hourly Cost: ${{ hourly_cost }}"
+          - "Daily Cost: ${{ daily_cost }}"
+          - "Monthly Cost: ${{ monthly_cost }}"
+          - "Note: Costs shown are for compute only. Additional charges apply for storage, network, etc."
+  when: show_cost_info | default(false) | bool
+
+# Snapshot management
+- name: Create VM snapshot
+  block:
+    - name: Create snapshot of OS disk
+      command: >
+        az snapshot create
+        --resource-group {{ azure_resource_group }}
+        --name {{ vm_name }}-snapshot-{{ ansible_date_time.epoch }}
+        --source {{ vm_current_state.vms[0].storage_profile.os_disk.name }}
+        --tags Purpose=Backup CreatedBy=Ansible Date={{ ansible_date_time.date }}
+      register: snapshot_result
+
+    - name: Display snapshot information
+      debug:
+        msg: "Snapshot created: {{ vm_name }}-snapshot-{{ ansible_date_time.epoch }}"
+  when: create_snapshot | default(false) | bool
+
+# Resize VM
+- name: Resize VM
+  block:
+    - name: Validate new size
+      assert:
+        that:
+          - new_vm_size is defined
+          - new_vm_size != ""
+        fail_msg: "new_vm_size must be specified for resize operation"
+
+    - name: Deallocate VM before resize
+      azure.azcollection.azure_rm_virtualmachine:
+        name: "{{ vm_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        allocated: no
+
+    - name: Resize the VM
+      azure.azcollection.azure_rm_virtualmachine:
+        name: "{{ vm_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        vm_size: "{{ new_vm_size }}"
+
+    - name: Start VM after resize
+      azure.azcollection.azure_rm_virtualmachine:
+        name: "{{ vm_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        started: yes
+
+    - name: Display resize information
+      debug:
+        msg: "VM resized from {{ vm_size }} to {{ new_vm_size }}"
+  when: vm_operation == 'resize'
+
+# Create action log
+- name: Log management action
+  copy:
+    content: |
+      Timestamp: {{ ansible_date_time.iso8601 }}
+      Action: {{ vm_operation }}
+      VM Name: {{ vm_name }}
+      Resource Group: {{ azure_resource_group }}
+      Performed By: {{ lookup('env', 'USER') }}
+      Result: Success
+      Details: {{ action_details | default('N/A') }}
+    dest: "/tmp/{{ vm_name }}_management_{{ ansible_date_time.epoch }}.log"
+  delegate_to: localhost
+  when: log_actions | default(true) | bool

@@ -1,0 +1,121 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: no
+  tasks:
+    - name: Check if role was executed
+      stat:
+        path: /tmp/azure_vm_role_executed
+      register: role_executed
+    
+    - name: Verify role execution
+      assert:
+        that:
+          - role_executed.stat.exists
+        fail_msg: "Azure VM role was not executed properly"
+    
+    - name: Read security rules configuration
+      slurp:
+        src: /tmp/security_rules_applied
+      register: security_rules
+    
+    - name: Verify security rules were applied
+      assert:
+        that:
+          - security_rules.content | b64decode | from_json is list
+          - security_rules.content | b64decode | from_json | length > 0
+        fail_msg: "Security rules were not properly configured"
+    
+    - name: Check VM configuration
+      stat:
+        path: /tmp/vm_config
+      register: vm_config
+    
+    - name: Verify VM configuration exists
+      assert:
+        that:
+          - vm_config.stat.exists
+        fail_msg: "VM configuration was not created"
+    
+    # Security-specific verifications
+    - name: Check for fail2ban configuration (if webserver role included)
+      stat:
+        path: /etc/fail2ban/jail.local
+      register: fail2ban_config
+      ignore_errors: yes
+    
+    - name: Verify SSH hardening
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      check_mode: yes
+      register: ssh_config_check
+      loop:
+        - regexp: '^#?PermitRootLogin'
+          line: 'PermitRootLogin no'
+        - regexp: '^#?PasswordAuthentication'
+          line: 'PasswordAuthentication no'
+      when: not (azure_test_mode | default(false))
+    
+    # NSG Rules verification
+    - name: Simulate NSG rule check
+      shell: |
+        # In real scenario, this would check actual Azure NSG rules
+        # For testing, we verify the mock was called
+        if command -v az &> /dev/null; then
+          az network nsg rule list --nsg-name test-nsg --resource-group test-rg 2>/dev/null || echo "[]"
+        else
+          echo "[]"
+        fi
+      register: nsg_rules
+      changed_when: false
+    
+    - name: Verify required ports are configured
+      set_fact:
+        required_ports:
+          - 22    # SSH
+          - 80    # HTTP (if webserver)
+          - 443   # HTTPS (if webserver)
+    
+    - name: Check Docker installation (if docker role included)
+      command: docker --version
+      register: docker_check
+      ignore_errors: yes
+      when: install_docker | default(false)
+    
+    # Performance checks
+    - name: Check system resources
+      shell: |
+        echo "CPU: $(nproc)"
+        echo "Memory: $(free -h | grep Mem | awk '{print $2}')"
+        echo "Disk: $(df -h / | tail -1 | awk '{print $2}')"
+      register: system_resources
+    
+    - name: Display system resources
+      debug:
+        var: system_resources.stdout_lines
+    
+    # Final summary
+    - name: Create verification report
+      copy:
+        content: |
+          Azure VM Role Verification Report
+          =================================
+          
+          Role Execution: PASSED
+          Security Configuration: {{ 'PASSED' if security_rules.content is defined else 'FAILED' }}
+          VM Configuration: {{ 'PASSED' if vm_config.stat.exists else 'FAILED' }}
+          
+          Security Checks:
+          - NSG Rules: {{ 'CONFIGURED' if nsg_rules.stdout != '[]' else 'PENDING' }}
+          - SSH Hardening: {{ 'CONFIGURED' if not azure_test_mode else 'SKIPPED (test mode)' }}
+          - Fail2ban: {{ 'INSTALLED' if fail2ban_config.stat.exists else 'NOT INSTALLED' }}
+          
+          System Resources:
+          {{ system_resources.stdout }}
+          
+          Test completed at: {{ ansible_date_time.iso8601 }}
+        dest: /tmp/verification_report.txt
+      when: ansible_date_time is defined

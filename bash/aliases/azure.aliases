@@ -2,8 +2,31 @@
 alias azl='az login'
 alias azal='az account list -o table'
 alias azrg='az group list -o table'
-alias azvm='az vm list -d -o table'
+alias azvml='az vm list -d -o table'
 alias azaks='az aks list -o table'
+
+# Azure VM Management aliases (requires vm-automation.sh functions)
+alias azvms='azvm_start'         # Start a VM (interactive with fzf)
+alias azvmst='azvm_stop'         # Stop/deallocate a VM (interactive with fzf)
+alias azvmd='azvm_delete'        # Delete a VM with confirmation
+alias azvmstat='azvm_status'     # Show VM status
+alias azvmip='azvm_get_ip'       # Get VM public IP
+alias azvmssh='azvm_ssh'         # Quick SSH to VM
+alias azvmlist='azvm_list'       # List all VMs
+alias azvmlistd='azvm_list detailed'  # List all VMs with detailed info
+alias azvmwait='azvm_wait'       # Wait for VM operation to complete
+
+# Quick VM operations
+alias azvmstart='azvm_start'     # Start VM (interactive)
+alias azvmstop='azvm_stop'       # Stop VM (deallocate by default)
+alias azvmrestart='azvm_stop && sleep 5 && azvm_start'  # Restart VM
+
+# SSH and networking shortcuts
+alias azvmcfg='azvm_ssh_config'  # Generate SSH config for VM
+alias azvmaip='azvm_assign_ip'   # Assign public IP to VM
+
+# Ansible integration
+alias azvmcreate='azvm_create_ansible'  # Create VM using Ansible playbook
 
 #Azure Machine Learing Conda aliases
 alias coap='conda activate azureml_py310_sdkv2'

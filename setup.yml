@@ -34,7 +34,7 @@
         executable: /bin/bash
       when: azure_cli_check.rc != 0
 
-    - name: Install Python requirements
+    - name: Install Python requirements (non-Azure)
       become: true
       ansible.builtin.pip:
         requirements: "{{ dotfiles_dir }}/requirements.txt"

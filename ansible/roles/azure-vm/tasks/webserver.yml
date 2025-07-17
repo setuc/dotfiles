@@ -1,0 +1,202 @@
+---
+# tasks/webserver.yml - Install and configure web server
+#
+# This task file sets up either Nginx or Apache based on configuration.
+
+- name: Install Nginx
+  block:
+    - name: Install Nginx package
+      package:
+        name: nginx
+        state: present
+      notify: restart nginx
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      when: ansible_os_family == "Debian"
+
+    - name: Create Nginx directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/nginx/sites-available
+        - /etc/nginx/sites-enabled
+        - /etc/nginx/conf.d
+        - /var/www/html
+
+    - name: Configure Nginx main config
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        mode: '0644'
+      notify: restart nginx
+      when: nginx_config_template is defined
+
+    - name: Create default site
+      copy:
+        content: |
+          server {
+              listen {{ webserver_port }} default_server;
+              listen [::]:{{ webserver_port }} default_server;
+              
+              root /var/www/html;
+              index index.html index.htm index.nginx-debian.html;
+              
+              server_name _;
+              
+              location / {
+                  try_files $uri $uri/ =404;
+              }
+              
+              location /health {
+                  access_log off;
+                  return 200 "healthy\n";
+                  add_header Content-Type text/plain;
+              }
+          }
+        dest: /etc/nginx/sites-available/default
+        mode: '0644'
+      notify: reload nginx
+
+    - name: Enable default site
+      file:
+        src: /etc/nginx/sites-available/default
+        dest: /etc/nginx/sites-enabled/default
+        state: link
+      notify: reload nginx
+
+    - name: Test Nginx configuration
+      command: nginx -t
+      changed_when: false
+
+  when: webserver_type | default('nginx') == 'nginx'
+
+- name: Install Apache
+  block:
+    - name: Install Apache package
+      package:
+        name: "{{ apache_package_name | default('apache2') }}"
+        state: present
+      notify: restart apache
+
+    - name: Enable Apache modules
+      apache2_module:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rewrite
+        - ssl
+        - headers
+        - proxy
+        - proxy_http
+      when: ansible_os_family == "Debian"
+      notify: restart apache
+
+    - name: Create Apache directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/apache2/sites-available
+        - /etc/apache2/sites-enabled
+        - /var/www/html
+
+    - name: Configure Apache default site
+      copy:
+        content: |
+          <VirtualHost *:{{ webserver_port }}>
+              ServerAdmin webmaster@localhost
+              DocumentRoot /var/www/html
+              
+              ErrorLog ${APACHE_LOG_DIR}/error.log
+              CustomLog ${APACHE_LOG_DIR}/access.log combined
+              
+              <Directory /var/www/html>
+                  Options Indexes FollowSymLinks
+                  AllowOverride All
+                  Require all granted
+              </Directory>
+          </VirtualHost>
+        dest: /etc/apache2/sites-available/000-default.conf
+        mode: '0644'
+      when: ansible_os_family == "Debian"
+      notify: restart apache
+
+  when: webserver_type | default('nginx') == 'apache'
+
+- name: Configure SSL (if enabled)
+  block:
+    - name: Install certbot
+      package:
+        name:
+          - certbot
+          - "python3-certbot-{{ webserver_type | default('nginx') }}"
+        state: present
+      when: enable_ssl | bool
+
+    - name: Create SSL directory
+      file:
+        path: /etc/ssl/certs/azure-vm
+        state: directory
+        mode: '0755'
+
+    - name: Generate self-signed certificate (for testing)
+      command: |
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/ssl/certs/azure-vm/selfsigned.key \
+        -out /etc/ssl/certs/azure-vm/selfsigned.crt \
+        -subj "/C=US/ST=State/L=City/O=Organization/CN={{ ansible_fqdn }}"
+      args:
+        creates: /etc/ssl/certs/azure-vm/selfsigned.crt
+      when: 
+        - enable_ssl | bool
+        - use_selfsigned_cert | default(true) | bool
+
+  when: enable_ssl is defined and enable_ssl | bool
+
+- name: Create test page
+  copy:
+    content: |
+      <!DOCTYPE html>
+      <html>
+      <head>
+          <title>Azure VM - {{ vm_name | default(ansible_hostname) }}</title>
+          <style>
+              body { font-family: Arial, sans-serif; margin: 40px; }
+              .info { background: #f0f0f0; padding: 20px; border-radius: 5px; }
+          </style>
+      </head>
+      <body>
+          <h1>Welcome to {{ vm_name | default(ansible_hostname) }}</h1>
+          <div class="info">
+              <p><strong>Server:</strong> {{ webserver_type | default('nginx') | title }}</p>
+              <p><strong>Hostname:</strong> {{ ansible_hostname }}</p>
+              <p><strong>IP Address:</strong> {{ ansible_default_ipv4.address | default('N/A') }}</p>
+              <p><strong>OS:</strong> {{ ansible_distribution }} {{ ansible_distribution_version }}</p>
+              <p><strong>Managed by:</strong> Azure VM Automation</p>
+          </div>
+      </body>
+      </html>
+    dest: /var/www/html/index.html
+    mode: '0644'
+
+- name: Ensure web server is started and enabled
+  service:
+    name: "{{ webserver_type | default('nginx') }}"
+    state: started
+    enabled: yes
+
+- name: Configure firewall for web server
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - "{{ webserver_port }}"
+    - "{{ webserver_ssl_port }}"
+  when: firewall_enabled | default(true) | bool
