@@ -35,5 +35,11 @@
         "apt": "custom",
         "default": false,
         "custom_install": "curl -Ls https://astral.sh/uv/install.sh | bash"
+    },
+    "fzf": {
+        "description": "Command-line fuzzy finder",
+        "winget": "junegunn.fzf",
+        "apt": "fzf",
+        "default": true
     }
 }
