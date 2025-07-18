@@ -45,6 +45,14 @@
   tags:
     - security
 
+- name: Deploy Azure Bastion
+  include_tasks: bastion.yml
+  when: 
+    - azure_vm_operation | default('') in ['create', 'update-bastion']
+    - enable_bastion | default(false) | bool or prepare_bastion | default(false) | bool
+  tags:
+    - bastion
+
 - name: Manage VM state
   include_tasks: manage-vm.yml
   when: azure_vm_operation | default('') in ['start', 'stop', 'restart', 'deallocate'] or vm_operation | default('') in ['start', 'stop', 'restart', 'deallocate', 'update-ip', 'jit-request', 'status', 'resize']

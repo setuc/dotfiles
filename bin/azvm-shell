@@ -25,6 +25,8 @@ AZURE_REGION="eastus"
 VM_IMAGE="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
 ADMIN_USERNAME="azureuser"
 SSH_KEY_PATH="$HOME/.ssh/id_ed25519.pub"
+ENABLE_BASTION=false
+BASTION_SKU="Standard"
 
 # Parse arguments
 VM_NAME=""
@@ -42,6 +44,14 @@ while [[ $# -gt 0 ]]; do
             AZURE_REGION="$2"
             shift 2
             ;;
+        --bastion)
+            ENABLE_BASTION=true
+            shift
+            ;;
+        --bastion-sku)
+            BASTION_SKU="$2"
+            shift 2
+            ;;
         --help|-h)
             cat << EOF
 Usage: $0 --name <vm-name> [options]
@@ -50,6 +60,8 @@ Options:
     --name <name>       VM name (required)
     --size <size>       VM size (default: Standard_B2s)
     --region <region>   Azure region (default: eastus)
+    --bastion           Enable Azure Bastion deployment
+    --bastion-sku <sku> Bastion SKU (default: Standard, options: Basic, Standard)
     --help, -h          Show this help
 
 Example:
@@ -221,6 +233,158 @@ if [[ -n "$SOURCE_IP" ]]; then
     info "SSH command: ssh $ADMIN_USERNAME@$VM_PUBLIC_IP"
 else
     warning "Could not detect source IP. NSG rules may be too restrictive."
+fi
+
+# Deploy Azure Bastion if requested
+if [[ "$ENABLE_BASTION" == "true" ]]; then
+    info "Deploying Azure Bastion..."
+    
+    # Create AzureBastionSubnet
+    info "Creating AzureBastionSubnet..."
+    az network vnet subnet create \
+        --name "AzureBastionSubnet" \
+        --resource-group "$RESOURCE_GROUP" \
+        --vnet-name "$VNET_NAME" \
+        --address-prefix "10.0.2.0/26" \
+        --output none
+    
+    # Create Bastion public IP
+    BASTION_NAME="${RESOURCE_GROUP}-bastion"
+    BASTION_PIP_NAME="${BASTION_NAME}-pip"
+    
+    info "Creating Bastion public IP..."
+    az network public-ip create \
+        --name "$BASTION_PIP_NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --location "$AZURE_REGION" \
+        --allocation-method Static \
+        --sku Standard \
+        --tags vm_name="$VM_NAME" service=bastion \
+        --output none
+    
+    # Create NSG for AzureBastionSubnet
+    info "Creating NSG for AzureBastionSubnet..."
+    az network nsg create \
+        --name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --location "$AZURE_REGION" \
+        --tags vm_name="$VM_NAME" service=bastion \
+        --output none
+    
+    # Add required NSG rules for Bastion
+    info "Configuring Bastion NSG rules..."
+    # Inbound rules
+    az network nsg rule create \
+        --nsg-name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowHttpsInbound" \
+        --priority 100 \
+        --direction Inbound \
+        --access Allow \
+        --protocol Tcp \
+        --source-address-prefixes "Internet" \
+        --destination-address-prefixes "*" \
+        --destination-port-ranges 443 \
+        --output none
+    
+    az network nsg rule create \
+        --nsg-name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowGatewayManagerInbound" \
+        --priority 110 \
+        --direction Inbound \
+        --access Allow \
+        --protocol Tcp \
+        --source-address-prefixes "GatewayManager" \
+        --destination-address-prefixes "*" \
+        --destination-port-ranges 443 \
+        --output none
+    
+    az network nsg rule create \
+        --nsg-name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowBastionHostCommunication" \
+        --priority 120 \
+        --direction Inbound \
+        --access Allow \
+        --protocol "*" \
+        --source-address-prefixes "VirtualNetwork" \
+        --destination-address-prefixes "VirtualNetwork" \
+        --destination-port-ranges 8080 5701 \
+        --output none
+    
+    # Outbound rules
+    az network nsg rule create \
+        --nsg-name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowSshRdpOutbound" \
+        --priority 100 \
+        --direction Outbound \
+        --access Allow \
+        --protocol "*" \
+        --source-address-prefixes "*" \
+        --destination-address-prefixes "VirtualNetwork" \
+        --destination-port-ranges 22 3389 \
+        --output none
+    
+    az network nsg rule create \
+        --nsg-name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowAzureCloudOutbound" \
+        --priority 110 \
+        --direction Outbound \
+        --access Allow \
+        --protocol Tcp \
+        --source-address-prefixes "*" \
+        --destination-address-prefixes "AzureCloud" \
+        --destination-port-ranges 443 \
+        --output none
+    
+    # Associate NSG with subnet
+    az network vnet subnet update \
+        --name "AzureBastionSubnet" \
+        --resource-group "$RESOURCE_GROUP" \
+        --vnet-name "$VNET_NAME" \
+        --network-security-group "AzureBastionSubnet-nsg" \
+        --output none
+    
+    # Deploy Bastion
+    info "Deploying Azure Bastion (this may take 5-10 minutes)..."
+    az network bastion create \
+        --name "$BASTION_NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --vnet-name "$VNET_NAME" \
+        --public-ip-address "$BASTION_PIP_NAME" \
+        --sku "$BASTION_SKU" \
+        --enable-tunneling true \
+        --enable-ip-connect true \
+        --tags vm_name="$VM_NAME" service=bastion \
+        --output none
+    
+    success "Azure Bastion deployed successfully!"
+    
+    # Create connection helper script
+    cat > "/tmp/connect-bastion-${VM_NAME}.sh" << EOF
+#!/bin/bash
+# Connect to $VM_NAME via Azure Bastion
+
+echo "Establishing Bastion tunnel to $VM_NAME..."
+az network bastion tunnel \\
+    --name "$BASTION_NAME" \\
+    --resource-group "$RESOURCE_GROUP" \\
+    --target-resource-id "/subscriptions/\$(az account show --query id -o tsv)/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Compute/virtualMachines/$VM_NAME" \\
+    --resource-port 22 \\
+    --port 2222
+
+# In another terminal, connect with:
+# ssh -p 2222 $ADMIN_USERNAME@localhost
+EOF
+    chmod +x "/tmp/connect-bastion-${VM_NAME}.sh"
+    
+    info "Bastion connection helper created: /tmp/connect-bastion-${VM_NAME}.sh"
+    info "To connect via Bastion:"
+    info "  1. Run: /tmp/connect-bastion-${VM_NAME}.sh"
+    info "  2. In another terminal: ssh -p 2222 $ADMIN_USERNAME@localhost"
 fi
 
 # Update SSH config
