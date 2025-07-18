@@ -1,0 +1,271 @@
+---
+# tasks/bastion.yml - Azure Bastion deployment and configuration
+#
+# This task file handles the deployment of Azure Bastion for secure VM access
+# without exposing SSH/RDP ports to the internet.
+
+- name: Check if Bastion deployment is requested
+  set_fact:
+    deploy_bastion: "{{ enable_bastion | default(false) | bool or prepare_bastion | default(false) | bool }}"
+
+- name: Bastion Configuration Block
+  when: deploy_bastion
+  block:
+    - name: Get existing Bastion hosts in resource group
+      command: >
+        az network bastion list
+        --resource-group {{ azure_resource_group }}
+        --query "[].name"
+        --output tsv
+      register: existing_bastions
+      changed_when: false
+      failed_when: false
+
+    - name: Set Bastion name
+      set_fact:
+        bastion_name: "{{ bastion_host_name | default(azure_resource_group + '-bastion') }}"
+        bastion_exists: "{{ bastion_host_name | default(azure_resource_group + '-bastion') in (existing_bastions.stdout_lines | default([])) }}"
+
+    - name: Display Bastion status
+      debug:
+        msg: "Bastion '{{ bastion_name }}' {{ 'already exists' if bastion_exists else 'will be created' }}"
+
+    - name: Create AzureBastionSubnet
+      azure.azcollection.azure_rm_subnet:
+        name: "AzureBastionSubnet"
+        resource_group: "{{ azure_resource_group }}"
+        virtual_network: "{{ vnet_name }}"
+        address_prefix: "{{ bastion_subnet_prefix | default('10.0.2.0/26') }}"
+      when: not bastion_exists
+
+    - name: Create public IP for Bastion
+      azure.azcollection.azure_rm_publicipaddress:
+        name: "{{ bastion_name }}-pip"
+        resource_group: "{{ azure_resource_group }}"
+        allocation_method: Static
+        sku: Standard
+        tags: "{{ resource_tags | combine({'service': 'bastion'}) }}"
+      register: bastion_pip
+      when: not bastion_exists
+
+    - name: Create NSG for AzureBastionSubnet
+      azure.azcollection.azure_rm_securitygroup:
+        name: "AzureBastionSubnet-nsg"
+        resource_group: "{{ azure_resource_group }}"
+        rules:
+          # Inbound rules
+          - name: "AllowHttpsInbound"
+            priority: 100
+            direction: Inbound
+            access: Allow
+            protocol: Tcp
+            source_address_prefix: "Internet"
+            destination_address_prefix: "*"
+            source_port_range: "*"
+            destination_port_range: "443"
+            description: "Allow HTTPS from Internet"
+          
+          - name: "AllowGatewayManagerInbound"
+            priority: 110
+            direction: Inbound
+            access: Allow
+            protocol: Tcp
+            source_address_prefix: "GatewayManager"
+            destination_address_prefix: "*"
+            source_port_range: "*"
+            destination_port_range: "443"
+            description: "Allow Gateway Manager"
+          
+          - name: "AllowAzureLoadBalancerInbound"
+            priority: 120
+            direction: Inbound
+            access: Allow
+            protocol: "*"
+            source_address_prefix: "AzureLoadBalancer"
+            destination_address_prefix: "*"
+            source_port_range: "*"
+            destination_port_range: "443"
+            description: "Allow Azure Load Balancer"
+          
+          - name: "AllowBastionHostCommunication"
+            priority: 130
+            direction: Inbound
+            access: Allow
+            protocol: "*"
+            source_address_prefix: "VirtualNetwork"
+            destination_address_prefix: "VirtualNetwork"
+            source_port_range: "*"
+            destination_port_ranges:
+              - "8080"
+              - "5701"
+            description: "Allow Bastion Host Communication"
+          
+          # Outbound rules
+          - name: "AllowSshRdpOutbound"
+            priority: 100
+            direction: Outbound
+            access: Allow
+            protocol: "*"
+            source_address_prefix: "*"
+            destination_address_prefix: "VirtualNetwork"
+            source_port_range: "*"
+            destination_port_ranges:
+              - "22"
+              - "3389"
+            description: "Allow SSH and RDP to VirtualNetwork"
+          
+          - name: "AllowAzureCloudOutbound"
+            priority: 110
+            direction: Outbound
+            access: Allow
+            protocol: Tcp
+            source_address_prefix: "*"
+            destination_address_prefix: "AzureCloud"
+            source_port_range: "*"
+            destination_port_range: "443"
+            description: "Allow Azure Cloud Communication"
+          
+          - name: "AllowBastionCommunication"
+            priority: 120
+            direction: Outbound
+            access: Allow
+            protocol: "*"
+            source_address_prefix: "VirtualNetwork"
+            destination_address_prefix: "VirtualNetwork"
+            source_port_range: "*"
+            destination_port_ranges:
+              - "8080"
+              - "5701"
+            description: "Allow Bastion Communication"
+          
+          - name: "AllowGetSessionInformation"
+            priority: 130
+            direction: Outbound
+            access: Allow
+            protocol: "*"
+            source_address_prefix: "*"
+            destination_address_prefix: "Internet"
+            source_port_range: "*"
+            destination_port_range: "80"
+            description: "Allow Get Session Information"
+        tags: "{{ resource_tags | combine({'service': 'bastion'}) }}"
+      when: not bastion_exists
+
+    - name: Associate NSG with AzureBastionSubnet
+      command: >
+        az network vnet subnet update
+        --name AzureBastionSubnet
+        --resource-group {{ azure_resource_group }}
+        --vnet-name {{ vnet_name }}
+        --network-security-group AzureBastionSubnet-nsg
+      when: not bastion_exists
+
+    - name: Deploy Azure Bastion
+      command: >
+        az network bastion create
+        --name {{ bastion_name }}
+        --resource-group {{ azure_resource_group }}
+        --vnet-name {{ vnet_name }}
+        --public-ip-address {{ bastion_name }}-pip
+        --sku {{ bastion_sku | default('Standard') }}
+        --enable-tunneling {{ 'true' if bastion_enable_tunneling | default(true) | bool else 'false' }}
+        --enable-ip-connect {{ 'true' if bastion_enable_ip_connect | default(true) | bool else 'false' }}
+        --tags {{ resource_tags | combine({'service': 'bastion'}) | to_json }}
+      when: 
+        - not bastion_exists
+        - enable_bastion | default(false) | bool
+      register: bastion_deployment
+      async: 600  # Bastion deployment can take up to 10 minutes
+      poll: 30
+
+    - name: Wait for Bastion deployment to complete
+      async_status:
+        jid: "{{ bastion_deployment.ansible_job_id }}"
+      register: bastion_result
+      until: bastion_result.finished
+      retries: 20
+      delay: 30
+      when: 
+        - bastion_deployment is defined
+        - bastion_deployment.ansible_job_id is defined
+
+    - name: Get Bastion details
+      command: >
+        az network bastion show
+        --name {{ bastion_name }}
+        --resource-group {{ azure_resource_group }}
+        --query "{name:name, provisioningState:provisioningState, sku:sku.name}"
+        --output json
+      register: bastion_info
+      when: enable_bastion | default(false) | bool
+
+    - name: Display Bastion information
+      debug:
+        msg:
+          - "Bastion Host: {{ (bastion_info.stdout | from_json).name }}"
+          - "SKU: {{ (bastion_info.stdout | from_json).sku }}"
+          - "Status: {{ (bastion_info.stdout | from_json).provisioningState }}"
+      when: 
+        - bastion_info is defined
+        - bastion_info.stdout is defined
+
+    - name: Create Bastion connection helper script
+      copy:
+        dest: "/tmp/connect-via-bastion-{{ vm_name }}.sh"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Auto-generated script to connect to {{ vm_name }} via Bastion
+          
+          BASTION_NAME="{{ bastion_name }}"
+          RESOURCE_GROUP="{{ azure_resource_group }}"
+          VM_RESOURCE_ID="/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ azure_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ vm_name }}"
+          
+          echo "Connecting to {{ vm_name }} via Azure Bastion..."
+          echo "This will create a local tunnel on port 2222"
+          
+          # Check if azvm-bastion-tunnel is available
+          if command -v azvm-bastion-tunnel &> /dev/null; then
+              azvm-bastion-tunnel --vm-name {{ vm_name }} --local-port 2222
+          else
+              az network bastion tunnel \
+                --name "$BASTION_NAME" \
+                --resource-group "$RESOURCE_GROUP" \
+                --target-resource-id "$VM_RESOURCE_ID" \
+                --resource-port 22 \
+                --port 2222
+          fi
+      delegate_to: localhost
+      when: enable_bastion | default(false) | bool
+
+    - name: Display Bastion connection instructions
+      debug:
+        msg:
+          - "=== Bastion Connection Instructions ==="
+          - "To connect to {{ vm_name }} via Bastion, use one of these methods:"
+          - ""
+          - "Method 1 - Using helper script:"
+          - "  bash /tmp/connect-via-bastion-{{ vm_name }}.sh"
+          - "  ssh -p 2222 {{ vm_admin_username }}@localhost"
+          - ""
+          - "Method 2 - Using azvm-bastion-tunnel:"
+          - "  azvm-bastion-tunnel --vm-name {{ vm_name }}"
+          - "  ssh -p 2222 {{ vm_admin_username }}@localhost"
+          - ""
+          - "Method 3 - Direct Azure CLI:"
+          - "  az network bastion ssh --name {{ bastion_name }} --resource-group {{ azure_resource_group }} --target-resource-id /subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ azure_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ vm_name }} --auth-type ssh-key --username {{ vm_admin_username }} --ssh-key ~/.ssh/id_ed25519"
+      when: enable_bastion | default(false) | bool
+
+- name: Store Bastion configuration
+  copy:
+    content: |
+      # Bastion Configuration for {{ azure_resource_group }}
+      BASTION_NAME={{ bastion_name | default('Not deployed') }}
+      BASTION_RESOURCE_GROUP={{ azure_resource_group }}
+      BASTION_DEPLOYED={{ deploy_bastion }}
+      BASTION_SKU={{ bastion_sku | default('Standard') }}
+      BASTION_SUBNET={{ bastion_subnet_prefix | default('10.0.2.0/26') }}
+      DEPLOYMENT_DATE={{ ansible_date_time.iso8601 }}
+    dest: "/tmp/bastion-config-{{ azure_resource_group }}.env"
+  delegate_to: localhost
+  when: deploy_bastion
