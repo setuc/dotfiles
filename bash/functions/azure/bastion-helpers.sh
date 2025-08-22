@@ -19,7 +19,7 @@ azvm-bastion-connect() {
         echo -e "${RED}Error:${NC} VM name is required"
         echo "Usage: azvm-bastion-connect <vm-name> [local-port]"
         return 1
-    }
+    fi
     
     echo -e "${BLUE}Establishing Bastion tunnel to ${vm_name}...${NC}"
     
@@ -42,7 +42,7 @@ azvm-bastion-ssh() {
         echo -e "${RED}Error:${NC} VM name is required"
         echo "Usage: azvm-bastion-ssh <vm-name> [local-port] [ssh-user]"
         return 1
-    }
+    fi
     
     # Start tunnel in background
     echo -e "${BLUE}Starting Bastion tunnel in background...${NC}"
@@ -82,7 +82,7 @@ azvm-bastion-kill() {
         echo -e "${RED}Error:${NC} Port or PID is required"
         echo "Usage: azvm-bastion-kill <port|pid>"
         return 1
-    }
+    fi
     
     if command -v azvm-bastion-monitor &> /dev/null; then
         azvm-bastion-monitor --kill "$target"
