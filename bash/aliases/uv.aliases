@@ -1,5 +1,115 @@
-# uv aliases
-alias uvs='uv sync'
-alias uvp='uv pip'
-alias uvpi='uv pip install'
-alias uvps='uv pip sync'
+# UV - Fast Python Package Manager Aliases
+# https://github.com/astral-sh/uv
+
+# === Core UV Commands ===
+alias uvs='uv sync'              # Sync project dependencies
+alias uvr='uv run'               # Run a command in the project environment
+alias uvi='uv init'              # Initialize a new project
+alias uva='uv add'               # Add a dependency to the project
+alias uvl='uv lock'              # Update the project's lockfile
+alias uvt='uv tree'              # Display dependency tree
+alias uve='uv export'            # Export lockfile to requirements.txt format
+
+# === Virtual Environment Management ===
+alias uvv='uv venv'              # Create a virtual environment
+alias uvva='uv venv .venv'       # Create venv in .venv directory (common convention)
+alias uvvs='source .venv/bin/activate'  # Source/activate the virtual environment
+alias uvvd='deactivate'          # Deactivate current virtual environment
+
+# === Quick Activation Helpers ===
+# Source virtual environment - tries common locations
+uvsource() {
+    if [ -f ".venv/bin/activate" ]; then
+        source .venv/bin/activate
+        echo "Activated .venv"
+    elif [ -f "venv/bin/activate" ]; then
+        source venv/bin/activate
+        echo "Activated venv"
+    elif [ -f "env/bin/activate" ]; then
+        source env/bin/activate
+        echo "Activated env"
+    else
+        echo "No virtual environment found in common locations (.venv, venv, env)"
+        return 1
+    fi
+}
+alias uvact='uvsource'           # Quick alias for sourcing venv
+
+# === Python Version Management ===
+alias uvpy='uv python'           # Manage Python installations
+alias uvpyl='uv python list'     # List available Python versions
+alias uvpyi='uv python install'  # Install a Python version
+alias uvpyp='uv python pin'      # Pin project to specific Python version
+
+# === Pip Compatibility Commands ===
+alias uvp='uv pip'               # UV's pip interface
+alias uvpi='uv pip install'      # Install packages
+alias uvpu='uv pip uninstall'    # Uninstall packages
+alias uvpl='uv pip list'         # List installed packages
+alias uvpf='uv pip freeze'       # Output installed packages in requirements format
+alias uvps='uv pip sync'         # Sync packages from requirements.txt
+alias uvpc='uv pip compile'      # Compile requirements.txt to locked versions
+alias uvpsh='uv pip show'        # Show package details
+
+# === Tool Management ===
+alias uvtool='uv tool'           # Manage Python CLI tools
+alias uvtr='uv tool run'         # Run a tool without installing
+alias uvti='uv tool install'     # Install a Python CLI tool globally
+alias uvtu='uv tool uninstall'   # Uninstall a tool
+alias uvtl='uv tool list'        # List installed tools
+alias uvtup='uv tool upgrade'    # Upgrade installed tools
+
+# === Build & Publish ===
+alias uvb='uv build'             # Build Python package
+alias uvpub='uv publish'         # Publish package to PyPI
+
+# === Cache Management ===
+alias uvc='uv cache'             # Manage UV cache
+alias uvcc='uv cache clean'      # Clean the cache
+alias uvcl='uv cache list'       # List cache contents
+alias uvcp='uv cache prune'      # Remove unused cache entries
+
+# === Project Workflow Helpers ===
+# Create new project with venv and activate it
+uvnew() {
+    local project_name="${1:-}"
+    if [ -z "$project_name" ]; then
+        echo "Usage: uvnew <project-name>"
+        return 1
+    fi
+    uv init "$project_name" && \
+    cd "$project_name" && \
+    uv venv .venv && \
+    source .venv/bin/activate && \
+    echo "Project $project_name created and activated!"
+}
+
+# Install from requirements.txt and activate venv
+uvsetup() {
+    if [ -f "requirements.txt" ]; then
+        uv venv .venv && \
+        source .venv/bin/activate && \
+        uv pip sync requirements.txt && \
+        echo "Environment setup complete!"
+    elif [ -f "pyproject.toml" ]; then
+        uv sync && \
+        source .venv/bin/activate && \
+        echo "Environment synced from pyproject.toml!"
+    else
+        echo "No requirements.txt or pyproject.toml found"
+        return 1
+    fi
+}
+
+# Quick install and save to requirements
+uvinstall() {
+    uv pip install "$@" && \
+    uv pip freeze > requirements.txt && \
+    echo "Installed packages and updated requirements.txt"
+}
+
+# === Useful Combinations ===
+alias uvclean='uv cache clean && rm -rf .venv'  # Clean cache and remove venv
+alias uvfresh='uvclean && uvv .venv && uvvs'    # Fresh venv setup
+alias uvup='uv self update'                      # Update UV itself
+alias uvinfo='uv version && uv python list'      # Show UV and Python info
