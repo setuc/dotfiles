@@ -1,0 +1,409 @@
+#!/bin/bash
+#
+# azvm-shell - Azure VM creation using Azure CLI directly
+# This bypasses the problematic Ansible collection
+#
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Helper functions
+error() { echo -e "${RED}ERROR:${NC} $*" >&2; }
+success() { echo -e "${GREEN}SUCCESS:${NC} $*"; }
+info() { echo -e "${BLUE}INFO:${NC} $*"; }
+warning() { echo -e "${YELLOW}WARNING:${NC} $*"; }
+
+# Default values
+VM_SIZE="Standard_B2s"
+AZURE_REGION="eastus"
+VM_IMAGE="Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
+ADMIN_USERNAME="azureuser"
+SSH_KEY_PATH="$HOME/.ssh/id_ed25519.pub"
+ENABLE_BASTION=false
+BASTION_SKU="Standard"
+
+# Parse arguments
+VM_NAME=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --name)
+            VM_NAME="$2"
+            shift 2
+            ;;
+        --size)
+            VM_SIZE="$2"
+            shift 2
+            ;;
+        --region)
+            AZURE_REGION="$2"
+            shift 2
+            ;;
+        --bastion)
+            ENABLE_BASTION=true
+            shift
+            ;;
+        --bastion-sku)
+            BASTION_SKU="$2"
+            shift 2
+            ;;
+        --help|-h)
+            cat << EOF
+Usage: $0 --name <vm-name> [options]
+
+Options:
+    --name <name>       VM name (required)
+    --size <size>       VM size (default: Standard_B2s)
+    --region <region>   Azure region (default: eastus)
+    --bastion           Enable Azure Bastion deployment
+    --bastion-sku <sku> Bastion SKU (default: Standard, options: Basic, Standard)
+    --help, -h          Show this help
+
+Example:
+    $0 --name my-test-vm --size Standard_B1s --region westus
+EOF
+            exit 0
+            ;;
+        *)
+            error "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+# Validate required arguments
+if [[ -z "$VM_NAME" ]]; then
+    error "VM name is required. Use --name <name>"
+    exit 1
+fi
+
+# Check if SSH key exists
+if [[ ! -f "$SSH_KEY_PATH" ]]; then
+    error "SSH public key not found at $SSH_KEY_PATH"
+    exit 1
+fi
+
+# Set derived names
+RESOURCE_GROUP="${VM_NAME}-rg"
+VNET_NAME="${VM_NAME}-vnet"
+SUBNET_NAME="${VM_NAME}-subnet"
+NSG_NAME="${VM_NAME}-nsg"
+PIP_NAME="${VM_NAME}-pip"
+NIC_NAME="${VM_NAME}-nic"
+
+info "Creating Azure VM: $VM_NAME"
+
+# Create resource group
+info "Creating resource group: $RESOURCE_GROUP"
+az group create \
+    --name "$RESOURCE_GROUP" \
+    --location "$AZURE_REGION" \
+    --tags purpose=vm-automation created_by=azvm vm_name="$VM_NAME" \
+    --output none
+
+# Create virtual network
+info "Creating virtual network: $VNET_NAME"
+az network vnet create \
+    --name "$VNET_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$AZURE_REGION" \
+    --address-prefix 10.0.0.0/16 \
+    --subnet-name "$SUBNET_NAME" \
+    --subnet-prefix 10.0.1.0/24 \
+    --tags vm_name="$VM_NAME" \
+    --output none
+
+# Create Network Security Group with restrictive default rule
+info "Creating Network Security Group: $NSG_NAME"
+az network nsg create \
+    --name "$NSG_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$AZURE_REGION" \
+    --tags vm_name="$VM_NAME" \
+    --output none
+
+# Add default deny rule
+az network nsg rule create \
+    --nsg-name "$NSG_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "DenyAllInbound" \
+    --priority 4096 \
+    --direction Inbound \
+    --access Deny \
+    --protocol "*" \
+    --source-address-prefixes "*" \
+    --destination-address-prefixes "*" \
+    --output none
+
+# Create public IP
+info "Creating public IP: $PIP_NAME"
+az network public-ip create \
+    --name "$PIP_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$AZURE_REGION" \
+    --allocation-method Static \
+    --tags vm_name="$VM_NAME" \
+    --output none
+
+# Create network interface
+info "Creating network interface: $NIC_NAME"
+az network nic create \
+    --name "$NIC_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$AZURE_REGION" \
+    --vnet-name "$VNET_NAME" \
+    --subnet "$SUBNET_NAME" \
+    --public-ip-address "$PIP_NAME" \
+    --network-security-group "$NSG_NAME" \
+    --tags vm_name="$VM_NAME" \
+    --output none
+
+# Create virtual machine
+info "Creating virtual machine: $VM_NAME"
+az vm create \
+    --name "$VM_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$AZURE_REGION" \
+    --size "$VM_SIZE" \
+    --image "$VM_IMAGE" \
+    --admin-username "$ADMIN_USERNAME" \
+    --ssh-key-values "$SSH_KEY_PATH" \
+    --nics "$NIC_NAME" \
+    --tags vm_name="$VM_NAME" created_by=azvm \
+    --output none
+
+# Wait for VM to be running
+info "Waiting for VM to be running..."
+az vm wait --name "$VM_NAME" --resource-group "$RESOURCE_GROUP" --created --timeout 300
+
+# Get VM public IP
+info "Getting VM public IP..."
+VM_PUBLIC_IP=$(az network public-ip show \
+    --name "$PIP_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query ipAddress \
+    --output tsv)
+
+success "VM created with public IP: $VM_PUBLIC_IP"
+
+# Wait for SSH to be available
+info "Waiting for SSH to be available..."
+for i in {1..30}; do
+    if timeout 10 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+        -i "${SSH_KEY_PATH%.*}" \
+        "$ADMIN_USERNAME@$VM_PUBLIC_IP" \
+        'echo "SSH connection successful"' >/dev/null 2>&1; then
+        break
+    fi
+    sleep 10
+done
+
+# Get source IP via SSH connection
+info "Detecting source IP for security restriction..."
+SOURCE_IP=$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
+    -i "${SSH_KEY_PATH%.*}" \
+    "$ADMIN_USERNAME@$VM_PUBLIC_IP" \
+    'echo $SSH_CONNECTION' | awk '{print $1}')
+
+if [[ -n "$SOURCE_IP" ]]; then
+    success "Detected source IP: $SOURCE_IP"
+    
+    # Update NSG to allow SSH from source IP only
+    info "Updating NSG to allow SSH from source IP only..."
+    az network nsg rule create \
+        --nsg-name "$NSG_NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowSSHFromSource" \
+        --priority 1000 \
+        --direction Inbound \
+        --access Allow \
+        --protocol Tcp \
+        --source-address-prefixes "$SOURCE_IP/32" \
+        --destination-port-ranges 22 \
+        --output none
+    
+    success "VM $VM_NAME created successfully!"
+    info "Public IP: $VM_PUBLIC_IP"
+    info "SSH access restricted to: $SOURCE_IP"
+    info "SSH command: ssh $ADMIN_USERNAME@$VM_PUBLIC_IP"
+else
+    warning "Could not detect source IP. NSG rules may be too restrictive."
+fi
+
+# Deploy Azure Bastion if requested
+if [[ "$ENABLE_BASTION" == "true" ]]; then
+    info "Deploying Azure Bastion..."
+    
+    # Create AzureBastionSubnet
+    info "Creating AzureBastionSubnet..."
+    az network vnet subnet create \
+        --name "AzureBastionSubnet" \
+        --resource-group "$RESOURCE_GROUP" \
+        --vnet-name "$VNET_NAME" \
+        --address-prefix "10.0.2.0/26" \
+        --output none
+    
+    # Create Bastion public IP
+    BASTION_NAME="${RESOURCE_GROUP}-bastion"
+    BASTION_PIP_NAME="${BASTION_NAME}-pip"
+    
+    info "Creating Bastion public IP..."
+    az network public-ip create \
+        --name "$BASTION_PIP_NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --location "$AZURE_REGION" \
+        --allocation-method Static \
+        --sku Standard \
+        --tags vm_name="$VM_NAME" service=bastion \
+        --output none
+    
+    # Create NSG for AzureBastionSubnet
+    info "Creating NSG for AzureBastionSubnet..."
+    az network nsg create \
+        --name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --location "$AZURE_REGION" \
+        --tags vm_name="$VM_NAME" service=bastion \
+        --output none
+    
+    # Add required NSG rules for Bastion
+    info "Configuring Bastion NSG rules..."
+    # Inbound rules
+    az network nsg rule create \
+        --nsg-name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowHttpsInbound" \
+        --priority 100 \
+        --direction Inbound \
+        --access Allow \
+        --protocol Tcp \
+        --source-address-prefixes "Internet" \
+        --destination-address-prefixes "*" \
+        --destination-port-ranges 443 \
+        --output none
+    
+    az network nsg rule create \
+        --nsg-name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowGatewayManagerInbound" \
+        --priority 110 \
+        --direction Inbound \
+        --access Allow \
+        --protocol Tcp \
+        --source-address-prefixes "GatewayManager" \
+        --destination-address-prefixes "*" \
+        --destination-port-ranges 443 \
+        --output none
+    
+    az network nsg rule create \
+        --nsg-name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowBastionHostCommunication" \
+        --priority 120 \
+        --direction Inbound \
+        --access Allow \
+        --protocol "*" \
+        --source-address-prefixes "VirtualNetwork" \
+        --destination-address-prefixes "VirtualNetwork" \
+        --destination-port-ranges 8080 5701 \
+        --output none
+    
+    # Outbound rules
+    az network nsg rule create \
+        --nsg-name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowSshRdpOutbound" \
+        --priority 100 \
+        --direction Outbound \
+        --access Allow \
+        --protocol "*" \
+        --source-address-prefixes "*" \
+        --destination-address-prefixes "VirtualNetwork" \
+        --destination-port-ranges 22 3389 \
+        --output none
+    
+    az network nsg rule create \
+        --nsg-name "AzureBastionSubnet-nsg" \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "AllowAzureCloudOutbound" \
+        --priority 110 \
+        --direction Outbound \
+        --access Allow \
+        --protocol Tcp \
+        --source-address-prefixes "*" \
+        --destination-address-prefixes "AzureCloud" \
+        --destination-port-ranges 443 \
+        --output none
+    
+    # Associate NSG with subnet
+    az network vnet subnet update \
+        --name "AzureBastionSubnet" \
+        --resource-group "$RESOURCE_GROUP" \
+        --vnet-name "$VNET_NAME" \
+        --network-security-group "AzureBastionSubnet-nsg" \
+        --output none
+    
+    # Deploy Bastion
+    info "Deploying Azure Bastion (this may take 5-10 minutes)..."
+    az network bastion create \
+        --name "$BASTION_NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --vnet-name "$VNET_NAME" \
+        --public-ip-address "$BASTION_PIP_NAME" \
+        --sku "$BASTION_SKU" \
+        --enable-tunneling true \
+        --enable-ip-connect true \
+        --tags vm_name="$VM_NAME" service=bastion \
+        --output none
+    
+    success "Azure Bastion deployed successfully!"
+    
+    # Create connection helper script
+    cat > "/tmp/connect-bastion-${VM_NAME}.sh" << EOF
+#!/bin/bash
+# Connect to $VM_NAME via Azure Bastion
+
+echo "Establishing Bastion tunnel to $VM_NAME..."
+az network bastion tunnel \\
+    --name "$BASTION_NAME" \\
+    --resource-group "$RESOURCE_GROUP" \\
+    --target-resource-id "/subscriptions/\$(az account show --query id -o tsv)/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Compute/virtualMachines/$VM_NAME" \\
+    --resource-port 22 \\
+    --port 2222
+
+# In another terminal, connect with:
+# ssh -p 2222 $ADMIN_USERNAME@localhost
+EOF
+    chmod +x "/tmp/connect-bastion-${VM_NAME}.sh"
+    
+    info "Bastion connection helper created: /tmp/connect-bastion-${VM_NAME}.sh"
+    info "To connect via Bastion:"
+    info "  1. Run: /tmp/connect-bastion-${VM_NAME}.sh"
+    info "  2. In another terminal: ssh -p 2222 $ADMIN_USERNAME@localhost"
+fi
+
+# Update SSH config
+SSH_CONFIG_ENTRY="
+Host $VM_NAME
+    HostName $VM_PUBLIC_IP
+    User $ADMIN_USERNAME
+    IdentityFile ${SSH_KEY_PATH%.*}
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
+"
+
+info "Adding SSH config entry..."
+if ! grep -q "Host $VM_NAME" "$HOME/.ssh/config" 2>/dev/null; then
+    echo "$SSH_CONFIG_ENTRY" >> "$HOME/.ssh/config"
+    success "SSH config updated. You can now use: ssh $VM_NAME"
+else
+    info "SSH config entry already exists"
+fi
+
+success "VM creation completed successfully!"

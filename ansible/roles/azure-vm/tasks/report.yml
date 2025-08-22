@@ -1,0 +1,189 @@
+---
+# tasks/report.yml - Generate comprehensive VM report
+#
+# This task file creates detailed reports about the VM configuration,
+# security status, costs, and compliance.
+
+- name: Gather VM information
+  azure.azcollection.azure_rm_virtualmachine_info:
+    name: "{{ vm_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: vm_info
+  failed_when: false
+
+- name: Gather network information
+  azure.azcollection.azure_rm_networkinterface_info:
+    name: "{{ nic_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: nic_info
+  failed_when: false
+
+- name: Gather NSG information
+  azure.azcollection.azure_rm_securitygroup_info:
+    name: "{{ nsg_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: nsg_info
+  failed_when: false
+
+- name: Get VM pricing information
+  uri:
+    url: "https://prices.azure.com/api/retail/prices?$filter=serviceName eq 'Virtual Machines' and armRegionName eq '{{ azure_region }}' and skuName eq '{{ vm_size }}'"
+    return_content: yes
+  register: pricing_info
+  failed_when: false
+
+- name: Calculate estimated costs
+  set_fact:
+    vm_costs:
+      hourly: "{{ pricing_info.json.Items[0].retailPrice | default(0) }}"
+      daily: "{{ (pricing_info.json.Items[0].retailPrice | default(0) * 24) | round(2) }}"
+      monthly: "{{ (pricing_info.json.Items[0].retailPrice | default(0) * 24 * 30) | round(2) }}"
+      yearly: "{{ (pricing_info.json.Items[0].retailPrice | default(0) * 24 * 365) | round(2) }}"
+  when: pricing_info is succeeded
+
+- name: Check security compliance
+  set_fact:
+    security_checks:
+      ssh_restricted: "{{ nsg_info.securitygroups[0].rules | selectattr('destination_port_range', 'equalto', '22') | selectattr('source_address_prefix', 'equalto', '*') | list | length == 0 }}"
+      public_ip_secured: "{{ nsg_info.securitygroups[0].rules | selectattr('source_address_prefix', 'equalto', '*') | selectattr('access', 'equalto', 'Allow') | list | length == 0 }}"
+      managed_identity_enabled: "{{ vm_info.vms[0].identity.type is defined }}"
+      boot_diagnostics_enabled: "{{ vm_info.vms[0].diagnostics_profile.boot_diagnostics.enabled | default(false) }}"
+      disk_encryption: "{{ vm_info.vms[0].storage_profile.os_disk.encryption_settings is defined }}"
+  when: 
+    - vm_info.vms is defined
+    - nsg_info.securitygroups is defined
+
+- name: Get backup status
+  command: >
+    az backup protection show
+    --vault-name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+    --resource-group {{ azure_resource_group }}
+    --container-name {{ 'iaasvmcontainer;iaasvmcontainerv2;' + azure_resource_group + ';' + vm_name }}
+    --item-name {{ 'vm;iaasvmcontainerv2;' + azure_resource_group + ';' + vm_name }}
+    --query "{status:protectionStatus,lastBackup:latestRecoveryPoint}" -o json
+  register: backup_status
+  failed_when: false
+  when: enable_backup | default(false) | bool
+
+- name: Generate HTML report
+  template:
+    src: vm_report.html.j2
+    dest: "/tmp/{{ vm_name }}_report_{{ ansible_date_time.epoch }}.html"
+  delegate_to: localhost
+  vars:
+    report_data:
+      vm_name: "{{ vm_name }}"
+      resource_group: "{{ azure_resource_group }}"
+      region: "{{ azure_region }}"
+      vm_size: "{{ vm_size }}"
+      creation_time: "{{ vm_info.vms[0].tags.CreatedDate | default('Unknown') }}"
+      power_state: "{{ vm_info.vms[0].power_state | default('Unknown') }}"
+      public_ip: "{{ vm_public_ip | default('None') }}"
+      private_ip: "{{ vm_private_ip | default('Unknown') }}"
+      os_type: "{{ vm_info.vms[0].storage_profile.os_disk.os_type | default('Linux') }}"
+      admin_user: "{{ vm_admin_username }}"
+      costs: "{{ vm_costs | default({}) }}"
+      security: "{{ security_checks | default({}) }}"
+      backup_status: "{{ backup_status.stdout | default('{}') | from_json }}"
+      nsg_rules_count: "{{ nsg_info.securitygroups[0].rules | length | default(0) }}"
+      allowed_ips: "{{ allowed_ips | default([]) }}"
+      tags: "{{ vm_info.vms[0].tags | default({}) }}"
+  when: generate_html_report | default(true) | bool
+
+- name: Generate JSON report
+  copy:
+    content: "{{ report_json | to_nice_json }}"
+    dest: "/tmp/{{ vm_name }}_report_{{ ansible_date_time.epoch }}.json"
+  delegate_to: localhost
+  vars:
+    report_json:
+      metadata:
+        report_generated: "{{ ansible_date_time.iso8601 }}"
+        ansible_version: "{{ ansible_version.full }}"
+      vm_details:
+        name: "{{ vm_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        location: "{{ azure_region }}"
+        size: "{{ vm_size }}"
+        state: "{{ vm_info.vms[0].power_state | default('Unknown') }}"
+      network:
+        public_ip: "{{ vm_public_ip | default('None') }}"
+        private_ip: "{{ vm_private_ip | default('Unknown') }}"
+        vnet: "{{ vnet_name }}"
+        subnet: "{{ subnet_name }}"
+        nsg: "{{ nsg_name }}"
+        nsg_rules: "{{ nsg_info.securitygroups[0].rules | default([]) }}"
+      security:
+        compliant: "{{ security_checks.values() | select('equalto', true) | list | length == security_checks.values() | list | length }}"
+        checks: "{{ security_checks | default({}) }}"
+        allowed_ssh_ips: "{{ allowed_ips | default([]) }}"
+      costs:
+        estimates: "{{ vm_costs | default({}) }}"
+        currency: "USD"
+      backup:
+        enabled: "{{ enable_backup | default(false) }}"
+        status: "{{ backup_status.stdout | default('{}') | from_json }}"
+      monitoring:
+        enabled: "{{ enable_monitoring | default(false) }}"
+        workspace: "{{ log_analytics_workspace_name | default('Not configured') }}"
+  when: generate_json_report | default(true) | bool
+
+- name: Generate compliance report
+  copy:
+    content: |
+      Azure VM Compliance Report
+      =========================
+      Generated: {{ ansible_date_time.iso8601 }}
+      
+      VM Information:
+      - Name: {{ vm_name }}
+      - Resource Group: {{ azure_resource_group }}
+      - Region: {{ azure_region }}
+      
+      Security Compliance:
+      ✓ SSH Access Restricted: {{ '✓ PASS' if security_checks.ssh_restricted else '✗ FAIL' }}
+      ✓ No Public Access (*): {{ '✓ PASS' if security_checks.public_ip_secured else '✗ FAIL' }}
+      ✓ Managed Identity: {{ '✓ PASS' if security_checks.managed_identity_enabled else '✗ FAIL' }}
+      ✓ Boot Diagnostics: {{ '✓ PASS' if security_checks.boot_diagnostics_enabled else '✗ FAIL' }}
+      ✓ Disk Encryption: {{ '✓ PASS' if security_checks.disk_encryption else '✗ FAIL' }}
+      
+      Network Security:
+      - Total NSG Rules: {{ nsg_info.securitygroups[0].rules | length | default(0) }}
+      - SSH Allowed From: {{ allowed_ips | default(['No IPs configured']) | join(', ') }}
+      
+      Backup & DR:
+      - Backup Enabled: {{ 'Yes' if enable_backup | default(false) | bool else 'No' }}
+      - Last Backup: {{ (backup_status.stdout | default('{}') | from_json).lastBackup | default('N/A') }}
+      
+      Cost Management:
+      - VM Size: {{ vm_size }}
+      - Estimated Monthly Cost: ${{ vm_costs.monthly | default('N/A') }} USD
+      - Auto-shutdown: {{ 'Enabled' if auto_shutdown_enabled | default(false) | bool else 'Disabled' }}
+      
+      Recommendations:
+      {% if not security_checks.ssh_restricted %}
+      - CRITICAL: SSH access is not properly restricted. Update NSG rules immediately.
+      {% endif %}
+      {% if not security_checks.disk_encryption %}
+      - HIGH: Enable disk encryption for data at rest protection.
+      {% endif %}
+      {% if not enable_backup | default(false) | bool %}
+      - MEDIUM: Enable Azure Backup for disaster recovery.
+      {% endif %}
+      {% if not auto_shutdown_enabled | default(false) | bool %}
+      - LOW: Consider enabling auto-shutdown to reduce costs.
+      {% endif %}
+    dest: "/tmp/{{ vm_name }}_compliance_{{ ansible_date_time.epoch }}.txt"
+  delegate_to: localhost
+  when: generate_compliance_report | default(true) | bool
+
+- name: Display report summary
+  debug:
+    msg:
+      - "Reports Generated Successfully!"
+      - "HTML Report: /tmp/{{ vm_name }}_report_{{ ansible_date_time.epoch }}.html"
+      - "JSON Report: /tmp/{{ vm_name }}_report_{{ ansible_date_time.epoch }}.json"
+      - "Compliance Report: /tmp/{{ vm_name }}_compliance_{{ ansible_date_time.epoch }}.txt"
+      - ""
+      - "Security Status: {{ 'COMPLIANT' if security_checks.values() | select('equalto', true) | list | length == security_checks.values() | list | length else 'NON-COMPLIANT' }}"
+      - "Estimated Monthly Cost: ${{ vm_costs.monthly | default('N/A') }} USD"

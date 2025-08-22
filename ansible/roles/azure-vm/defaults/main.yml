@@ -1,0 +1,146 @@
+---
+# defaults/main.yml - Default variables for azure-vm role
+#
+# These variables provide sensible defaults for Azure VM operations.
+# They can be overridden at the playbook, inventory, or command line level.
+
+# Azure Configuration
+azure_region: "eastus"
+azure_subscription_id: "{{ lookup('env', 'AZURE_SUBSCRIPTION_ID') }}"
+
+# VM Configuration
+vm_size: "Standard_B2s"  # 2 vCPUs, 4GB RAM - good for development
+vm_admin_username: "azureuser"
+vm_os_disk_size_gb: 30
+vm_os_disk_type: "Premium_LRS"  # Use Premium SSD for better performance
+vm_data_disk_size_gb: 0  # 0 means no data disk
+enable_managed_identity: true  # Enable system-assigned managed identity
+
+# Default Ubuntu 22.04 LTS image
+vm_image:
+  offer: "0001-com-ubuntu-server-jammy"
+  publisher: "Canonical"
+  sku: "22_04-lts-gen2"
+  version: "latest"
+
+# Network Configuration
+vnet_address_prefix: "10.0.0.0/16"
+subnet_address_prefix: "10.0.1.0/24"
+enable_public_ip: true
+enable_accelerated_networking: false
+
+# Security Configuration
+# SECURITY FIRST: No default allowed sources - will be auto-detected
+allowed_ssh_sources: []  # Auto-detected from SSH connection
+allowed_http_sources:
+  - "*"  # Only when webserver is enabled
+allowed_https_sources:
+  - "*"  # Only when webserver with SSL is enabled
+detect_controller_ip: true
+update_ip_on_start: true
+harden_ssh: true
+configure_host_firewall: true
+enable_fail2ban: true
+enable_jit_access: false  # Requires Azure Defender
+prepare_bastion: false
+enable_bastion: false  # Deploy Bastion host
+bastion_sku: "Standard"  # Basic or Standard
+bastion_subnet_prefix: "10.0.2.0/26"  # Must be at least /26
+bastion_enable_tunneling: true  # Enable native client support (Standard SKU only)
+bastion_enable_ip_connect: true  # Enable IP-based connections (Standard SKU only)
+bastion_host_name: ""  # Auto-generated if not specified
+
+# SSH Configuration
+ssh_key_data: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub', errors='ignore') }}"
+generate_ssh_key: false
+
+# Python Environment Configuration
+ansible_python_interpreter: "{{ lookup('env', 'HOME') }}/.azvm-venv/bin/python"
+
+# Resource Naming Convention
+resource_prefix: ""
+resource_suffix: ""
+
+# Tags to apply to all resources
+resource_tags:
+  Environment: "Development"
+  ManagedBy: "Ansible"
+  CreatedBy: "{{ lookup('env', 'USER') }}"
+
+# VM Configuration Management
+enable_boot_diagnostics: true
+enable_vm_agent: true
+enable_automatic_updates: true
+
+# Backup Configuration
+enable_backup: false
+backup_policy_name: "DefaultPolicy"
+
+# Monitoring Configuration
+enable_monitoring: false
+log_analytics_workspace_name: ""
+
+# Package Management
+update_packages_on_boot: true
+reboot_after_updates: false
+
+# Common packages to install
+base_packages:
+  - curl
+  - wget
+  - git
+  - vim
+  - htop
+  - net-tools
+  - build-essential
+  - python3-pip
+  - python3-venv
+  - unzip
+  - jq
+  - tree
+  - ncdu
+  - tmux
+
+# Docker configuration (when docker role is applied)
+docker_install: false
+docker_compose_install: false
+docker_users:
+  - "{{ vm_admin_username }}"
+
+# Web server configuration (when webserver role is applied)
+webserver_type: "nginx"  # nginx or apache
+webserver_port: 80
+webserver_ssl_port: 443
+enable_ssl: false
+
+# Database configuration (when database role is applied)
+database_type: "postgresql"  # postgresql or mysql
+database_port: 5432
+database_root_password: "{{ lookup('password', '/dev/null length=20 chars=ascii_letters,digits') }}"
+database_backup_enabled: false
+
+# Firewall configuration
+firewall_enabled: true
+firewall_allowed_ports:
+  - port: 22
+    protocol: tcp
+    source: "{{ allowed_ssh_sources }}"
+  - port: 80
+    protocol: tcp
+    source: "{{ allowed_http_sources }}"
+  - port: 443
+    protocol: tcp
+    source: "{{ allowed_https_sources }}"
+
+# Ansible connection settings
+ansible_connection_timeout: 30
+ansible_ssh_retries: 3
+
+# Clean up settings
+remove_default_users: false
+disable_root_login: true
+
+# Cost optimization
+auto_shutdown_enabled: false
+auto_shutdown_time: "19:00"
+auto_shutdown_timezone: "Eastern Standard Time"

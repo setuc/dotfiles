@@ -1,0 +1,107 @@
+---
+# meta/main.yml - Role metadata
+#
+# This file defines role metadata including dependencies, supported platforms, and galaxy information.
+
+galaxy_info:
+  author: Azure VM Automation
+  description: Comprehensive Azure VM management role for provisioning and configuration
+  company: Dotfiles Project
+  
+  license: MIT
+  
+  min_ansible_version: "2.14"
+  
+  platforms:
+    - name: Ubuntu
+      versions:
+        - focal     # 20.04
+        - jammy     # 22.04
+        - noble     # 24.04
+    - name: Debian
+      versions:
+        - bullseye  # 11
+        - bookworm  # 12
+    - name: EL  # RedHat/CentOS/Rocky/Alma
+      versions:
+        - "8"
+        - "9"
+    - name: Amazon
+      versions:
+        - all
+    - name: Windows
+      versions:
+        - 2019
+        - 2022
+  
+  galaxy_tags:
+    - azure
+    - cloud
+    - vm
+    - automation
+    - infrastructure
+    - provisioning
+    - configuration
+    - management
+    - iaas
+    - devops
+
+dependencies: []
+  # Dependencies can be added here if needed
+  # - role: geerlingguy.docker
+  #   when: docker_install | default(false) | bool
+  # - role: geerlingguy.nginx
+  #   when: webserver_type | default('') == 'nginx'
+
+# Role-specific metadata
+role_name: azure-vm
+namespace: dotfiles
+
+# Collections required by this role
+collections:
+  - azure.azcollection
+  - community.general
+  - ansible.posix
+
+# Custom metadata for documentation
+custom_metadata:
+  documentation_url: "https://github.com/yourusername/dotfiles/docs/azure-vm-automation"
+  issue_tracker_url: "https://github.com/yourusername/dotfiles/issues"
+  changelog_url: "https://github.com/yourusername/dotfiles/blob/main/CHANGELOG.md"
+  
+  # Feature flags
+  features:
+    vm_provisioning: true
+    lifecycle_management: true
+    security_hardening: true
+    application_deployment: true
+    monitoring_integration: true
+    backup_configuration: true
+    cost_optimization: true
+    
+  # Supported Azure regions (examples)
+  supported_regions:
+    - eastus
+    - eastus2
+    - westus
+    - westus2
+    - centralus
+    - northeurope
+    - westeurope
+    - uksouth
+    - ukwest
+    - eastasia
+    - southeastasia
+    - japaneast
+    - japanwest
+    - australiaeast
+    - australiasoutheast
+    - brazilsouth
+    - canadacentral
+    - canadaeast
+    
+  # Version compatibility
+  compatibility:
+    azure_cli_min: "2.40.0"
+    python_min: "3.8"
+    terraform_min: "1.0.0"  # If Terraform integration is added

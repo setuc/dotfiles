@@ -1,0 +1,150 @@
+---
+# tasks/create-minimal.yml - Minimal VM creation
+#
+# This task file creates a basic Azure VM with security controls.
+# Simplified to avoid module import issues.
+
+- name: Create resource group
+  azure.azcollection.azure_rm_resourcegroup:
+    name: "{{ vm_name }}-rg"
+    location: "{{ azure_region }}"
+    tags:
+      purpose: "vm-automation"
+      created_by: "azvm"
+      vm_name: "{{ vm_name }}"
+
+- name: Create virtual network
+  azure.azcollection.azure_rm_virtualnetwork:
+    name: "{{ vm_name }}-vnet"
+    resource_group: "{{ vm_name }}-rg"
+    address_prefixes:
+      - "10.0.0.0/16"
+    tags:
+      vm_name: "{{ vm_name }}"
+
+- name: Create subnet
+  azure.azcollection.azure_rm_subnet:
+    name: "{{ vm_name }}-subnet"
+    resource_group: "{{ vm_name }}-rg"
+    virtual_network_name: "{{ vm_name }}-vnet"
+    address_prefix: "10.0.1.0/24"
+
+- name: Create Network Security Group with restrictive rules
+  azure.azcollection.azure_rm_securitygroup:
+    name: "{{ vm_name }}-nsg"
+    resource_group: "{{ vm_name }}-rg"
+    tags:
+      vm_name: "{{ vm_name }}"
+    rules:
+      - name: DenyAllInbound
+        protocol: "*"
+        source_address_prefix: "*"
+        destination_address_prefix: "*"
+        access: Deny
+        priority: 4096
+        direction: Inbound
+
+- name: Create public IP
+  azure.azcollection.azure_rm_publicipaddress:
+    name: "{{ vm_name }}-pip"
+    resource_group: "{{ vm_name }}-rg"
+    allocation_method: Static
+    tags:
+      vm_name: "{{ vm_name }}"
+
+- name: Create Network Interface
+  azure.azcollection.azure_rm_networkinterface:
+    name: "{{ vm_name }}-nic"
+    resource_group: "{{ vm_name }}-rg"
+    virtual_network: "{{ vm_name }}-vnet"
+    subnet: "{{ vm_name }}-subnet"
+    public_ip_name: "{{ vm_name }}-pip"
+    security_group: "{{ vm_name }}-nsg"
+    tags:
+      vm_name: "{{ vm_name }}"
+
+- name: Create Virtual Machine
+  azure.azcollection.azure_rm_virtualmachine:
+    name: "{{ vm_name }}"
+    resource_group: "{{ vm_name }}-rg"
+    vm_size: "{{ vm_size }}"
+    admin_username: "{{ vm_admin_username }}"
+    ssh_password_enabled: false
+    ssh_public_keys:
+      - path: "/home/{{ vm_admin_username }}/.ssh/authorized_keys"
+        key_data: "{{ ssh_key_data }}"
+    network_interfaces:
+      - name: "{{ vm_name }}-nic"
+    image:
+      offer: "{{ vm_image.offer }}"
+      publisher: "{{ vm_image.publisher }}"
+      sku: "{{ vm_image.sku }}"
+      version: "{{ vm_image.version }}"
+    tags:
+      vm_name: "{{ vm_name }}"
+      created_by: "azvm"
+
+- name: Wait for VM to be running
+  azure.azcollection.azure_rm_virtualmachine_info:
+    name: "{{ vm_name }}"
+    resource_group: "{{ vm_name }}-rg"
+  register: vm_info
+  until: vm_info.vms[0].power_state == "VM running"
+  retries: 30
+  delay: 10
+
+- name: Get VM public IP
+  azure.azcollection.azure_rm_publicipaddress_info:
+    name: "{{ vm_name }}-pip"
+    resource_group: "{{ vm_name }}-rg"
+  register: public_ip_info
+
+- name: Set VM public IP fact
+  set_fact:
+    vm_public_ip: "{{ public_ip_info.publicipaddresses[0].ip_address }}"
+
+- name: Test SSH connection to get source IP
+  shell: |
+    ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
+        -i ~/.ssh/id_ed25519 \
+        {{ vm_admin_username }}@{{ vm_public_ip }} \
+        'echo $SSH_CONNECTION' || true
+  register: ssh_result
+  retries: 5
+  delay: 10
+  until: ssh_result.stdout != ""
+
+- name: Extract source IP from SSH connection
+  set_fact:
+    source_ip: "{{ ssh_result.stdout.split()[0] }}"
+
+- name: Update NSG to allow SSH from source IP only
+  azure.azcollection.azure_rm_securitygroup:
+    name: "{{ vm_name }}-nsg"
+    resource_group: "{{ vm_name }}-rg"
+    tags:
+      vm_name: "{{ vm_name }}"
+    rules:
+      - name: AllowSSHFromSource
+        protocol: Tcp
+        source_address_prefix: "{{ source_ip }}"
+        destination_address_prefix: "*"
+        destination_port_range: "22"
+        access: Allow
+        priority: 1000
+        direction: Inbound
+      - name: DenyAllInbound
+        protocol: "*"
+        source_address_prefix: "*"
+        destination_address_prefix: "*"
+        access: Deny
+        priority: 4096
+        direction: Inbound
+
+- name: Display VM creation success
+  debug:
+    msg: |
+      VM {{ vm_name }} created successfully!
+      Public IP: {{ vm_public_ip }}
+      SSH access restricted to: {{ source_ip }}
+      SSH command: ssh {{ vm_admin_username }}@{{ vm_public_ip }}

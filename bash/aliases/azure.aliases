@@ -1,9 +1,37 @@
-# Azure CLI aliases
+# Azure CLI Basic Commands
 alias azl='az login'
 alias azal='az account list -o table'
 alias azrg='az group list -o table'
-alias azvm='az vm list -d -o table'
 alias azaks='az aks list -o table'
+
+# Azure VM Working Tool (Primary - with Bastion support)
+alias azvm='~/bin/azvm-working'                    # Base command
+alias azvmc='~/bin/azvm-working create'            # Create VM
+alias azvmd='~/bin/azvm-working delete'            # Delete VM
+alias azvml='~/bin/azvm-working list'              # List all VMs
+alias azvmld='~/bin/azvm-working list -d'          # List VMs with details
+alias azvms='~/bin/azvm-working status'            # Show VM status with Bastion info
+alias azvmstart='~/bin/azvm-working start'         # Start VM
+alias azvmstop='~/bin/azvm-working stop'           # Stop VM
+alias azvmrestart='~/bin/azvm-working stop --wait && ~/bin/azvm-working start --wait'  # Restart VM
+
+# Bastion and Connection Management
+alias azvmcon='~/bin/azvm-working connect'         # Connect via Bastion
+alias azvmb='~/bin/azvm-working connect --auto-reconnect'  # Bastion with auto-reconnect
+alias azvmbastion='~/bin/azvm-working bastion'     # Deploy Bastion to existing VM
+alias azvmt='~/bin/azvm-working tunnel'            # Tunnel management
+alias azvmtl='~/bin/azvm-working tunnel list'      # List tunnels
+alias azvmts='~/bin/azvm-working tunnel status'    # Tunnel status
+alias azvmtk='~/bin/azvm-working tunnel kill'      # Kill tunnel
+alias azvmcode='~/bin/azvm-vscode'                 # Setup VS Code connection via Bastion
+
+# Legacy VM Functions (vm-automation.sh) - kept for compatibility
+alias azvmip='azvm_get_ip'       # Get VM public IP
+alias azvmssh='azvm_ssh'         # Quick SSH to VM (without Bastion)
+alias azvmcfg='azvm_ssh_config'  # Generate SSH config for VM
+alias azvmaip='azvm_assign_ip'   # Assign public IP to VM
+alias azvmwait='azvm_wait'       # Wait for VM operation to complete
+alias azvmcreate='azvm_create_ansible'  # Create VM using Ansible playbook
 
 #Azure Machine Learing Conda aliases
 alias coap='conda activate azureml_py310_sdkv2'
@@ -16,3 +44,16 @@ alias coup='conda env update --file environment.yml --prune'
 # Default working directory for Azure ML compute instances
 # Allows overriding the path by setting AML_CODE_DIR
 alias wd='cd "${AML_CODE_DIR:-/home/azureuser/cloudfiles/code/Users/setuchokshi/}"'
+
+# Azure VM Working Tool aliases (enhanced VM management with Bastion)
+alias azvm='~/bin/azvm-working'                    # Base command
+alias azvmc='~/bin/azvm-working create'            # Create VM
+alias azvmcon='~/bin/azvm-working connect'         # Connect via Bastion
+alias azvmt='~/bin/azvm-working tunnel'            # Tunnel management
+alias azvmtl='~/bin/azvm-working tunnel list'      # List tunnels
+alias azvmts='~/bin/azvm-working tunnel status'    # Tunnel status
+alias azvmtk='~/bin/azvm-working tunnel kill'      # Kill tunnel
+alias azvmb='~/bin/azvm-working connect --auto-reconnect'  # Bastion with auto-reconnect
+alias azvmstat2='~/bin/azvm-working status'        # Enhanced status (with Bastion info)
+alias azvmstart2='~/bin/azvm-working start'        # Start VM
+alias azvmstop2='~/bin/azvm-working stop'          # Stop VM

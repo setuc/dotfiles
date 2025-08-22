@@ -34,7 +34,7 @@
         executable: /bin/bash
       when: azure_cli_check.rc != 0
 
-    - name: Install Python requirements
+    - name: Install Python requirements (non-Azure)
       become: true
       ansible.builtin.pip:
         requirements: "{{ dotfiles_dir }}/requirements.txt"
@@ -45,6 +45,12 @@
         path: "{{ ansible_env.HOME }}/bin"
         state: directory
         mode: "0755"
+
+    - name: Ensure unzip is installed for oh-my-posh
+      become: true
+      ansible.builtin.apt:
+        name: unzip
+        state: present
 
     - name: Run custom install commands
       ansible.builtin.shell: "{{ item.value.custom_install }}"

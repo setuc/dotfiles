@@ -1,0 +1,109 @@
+---
+# tasks/main.yml - Main entry point for azure-vm role
+#
+# This file orchestrates the various tasks for Azure VM management.
+# It includes conditional task files based on the operation being performed.
+
+- name: Include OS-specific variables
+  include_vars: "{{ item }}"
+  with_first_found:
+    - files:
+        - "{{ ansible_distribution }}-{{ ansible_distribution_version }}.yml"
+        - "{{ ansible_distribution }}.yml"
+        - "{{ ansible_os_family }}.yml"
+        - "default.yml"
+      paths:
+        - ../vars
+      skip: true
+
+- name: Validate Azure credentials
+  include_tasks: validate.yml
+  tags:
+    - always
+
+- name: Setup Azure prerequisites
+  include_tasks: prerequisites.yml
+  when: azure_setup_prerequisites | default(false) | bool
+  tags:
+    - prerequisites
+
+- name: Create Azure VM
+  include_tasks: create-minimal.yml
+  when: azure_vm_operation | default('') == 'create'
+  tags:
+    - create
+
+- name: Configure VM networking
+  include_tasks: networking.yml
+  when: azure_vm_operation | default('') in ['create', 'update-network']
+  tags:
+    - networking
+
+- name: Configure VM security
+  include_tasks: security.yml
+  when: azure_vm_operation | default('') in ['create', 'update-security']
+  tags:
+    - security
+
+- name: Deploy Azure Bastion
+  include_tasks: bastion.yml
+  when: 
+    - azure_vm_operation | default('') in ['create', 'update-bastion']
+    - enable_bastion | default(false) | bool or prepare_bastion | default(false) | bool
+  tags:
+    - bastion
+
+- name: Manage VM state
+  include_tasks: manage-vm.yml
+  when: azure_vm_operation | default('') in ['start', 'stop', 'restart', 'deallocate'] or vm_operation | default('') in ['start', 'stop', 'restart', 'deallocate', 'update-ip', 'jit-request', 'status', 'resize']
+  tags:
+    - manage
+
+- name: Configure VM post-creation
+  include_tasks: configure-vm.yml
+  when: azure_vm_operation | default('') in ['create', 'configure']
+  tags:
+    - configure
+
+- name: Install Docker
+  include_tasks: docker.yml
+  when: docker_install | default(false) | bool or 'docker' in (vm_roles | default(''))
+  tags:
+    - docker
+
+- name: Setup web server
+  include_tasks: webserver.yml
+  when: webserver_install | default(false) | bool or 'webserver' in (vm_roles | default(''))
+  tags:
+    - webserver
+
+- name: Setup database
+  include_tasks: database.yml
+  when: database_install | default(false) | bool or 'database' in (vm_roles | default(''))
+  tags:
+    - database
+
+- name: Configure monitoring
+  include_tasks: monitoring.yml
+  when: enable_monitoring | default(false) | bool
+  tags:
+    - monitoring
+
+- name: Configure backup
+  include_tasks: backup.yml
+  when: enable_backup | default(false) | bool
+  tags:
+    - backup
+
+- name: Cleanup tasks
+  include_tasks: cleanup.yml
+  when: azure_vm_operation | default('') == 'cleanup'
+  tags:
+    - cleanup
+
+- name: Generate report
+  include_tasks: report.yml
+  when: generate_report | default(true) | bool
+  tags:
+    - report
+    - always

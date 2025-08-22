@@ -1,0 +1,161 @@
+---
+# setup.yml - Setup and configure Azure VMs
+#
+# This playbook runs configuration tasks on Azure VMs after creation.
+# It can apply various roles and configurations based on requirements.
+#
+# Required variables:
+#   - vm_name: Name of the VM to setup
+#
+# Optional variables:
+#   - vm_roles: Comma-separated list of roles to apply
+#   - setup_user: User for SSH connection (default: azureuser)
+#   - setup_packages: Additional packages to install
+
+- name: Setup and Configure Azure Virtual Machine
+  hosts: "{{ vm_name | default('all') }}"
+  become: true
+  gather_facts: true
+  
+  vars:
+    setup_user: "{{ ansible_user | default('azureuser') }}"
+    vm_roles: ""
+    setup_packages: []
+    
+  pre_tasks:
+    - name: Wait for system to become reachable
+      wait_for_connection:
+        delay: 10
+        timeout: 300
+        
+    - name: Gather facts after connection
+      setup:
+      
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+      
+  tasks:
+    - name: Set hostname
+      hostname:
+        name: "{{ vm_name }}"
+      when: vm_name is defined
+      
+    - name: Install base packages
+      package:
+        name:
+          - curl
+          - wget
+          - git
+          - vim
+          - htop
+          - net-tools
+          - build-essential
+          - python3-pip
+          - python3-venv
+          - unzip
+          - jq
+        state: present
+        
+    - name: Install additional packages
+      package:
+        name: "{{ setup_packages }}"
+        state: present
+      when: setup_packages | length > 0
+      
+    - name: Configure firewall (UFW)
+      block:
+        - name: Install UFW
+          package:
+            name: ufw
+            state: present
+            
+        - name: Configure UFW defaults
+          ufw:
+            direction: "{{ item.direction }}"
+            policy: "{{ item.policy }}"
+          loop:
+            - { direction: 'incoming', policy: 'deny' }
+            - { direction: 'outgoing', policy: 'allow' }
+            
+        - name: Allow SSH through UFW
+          ufw:
+            rule: allow
+            port: '22'
+            proto: tcp
+            
+        - name: Enable UFW
+          ufw:
+            state: enabled
+      when: ansible_os_family == "Debian"
+      
+    - name: Configure automatic security updates
+      block:
+        - name: Install unattended-upgrades
+          package:
+            name: unattended-upgrades
+            state: present
+            
+        - name: Enable automatic security updates
+          debconf:
+            name: unattended-upgrades
+            question: unattended-upgrades/enable_auto_updates
+            value: 'true'
+            vtype: boolean
+      when: ansible_os_family == "Debian"
+      
+    - name: Create application directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ setup_user }}"
+        group: "{{ setup_user }}"
+        mode: '0755'
+      loop:
+        - /opt/apps
+        - /var/log/apps
+        - "/home/{{ setup_user }}/.config"
+        
+    - name: Configure Docker (if docker role specified)
+      include_role:
+        name: azure-vm
+        tasks_from: docker
+      when: "'docker' in vm_roles"
+      
+    - name: Configure web server (if webserver role specified)
+      include_role:
+        name: azure-vm
+        tasks_from: webserver
+      when: "'webserver' in vm_roles"
+      
+    - name: Configure database (if database role specified)
+      include_role:
+        name: azure-vm
+        tasks_from: database
+      when: "'database' in vm_roles"
+      
+  post_tasks:
+    - name: Display setup summary
+      debug:
+        msg:
+          - "VM Setup Complete!"
+          - "Hostname: {{ ansible_hostname }}"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "IP: {{ ansible_default_ipv4.address | default('N/A') }}"
+          - "Roles Applied: {{ vm_roles | default('base') }}"
+          
+    - name: Run custom post-setup script if exists
+      script: "{{ lookup('env', 'AZVM_CONFIG_PATH', lookup('env', 'HOME') + '/.config/azvm') }}/post-setup.sh"
+      args:
+        creates: /var/lib/azvm/.post-setup-complete
+      failed_when: false
+      
+    - name: Mark setup as complete
+      file:
+        path: /var/lib/azvm/.setup-complete
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'

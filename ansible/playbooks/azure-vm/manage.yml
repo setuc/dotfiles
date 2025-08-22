@@ -1,0 +1,136 @@
+---
+# manage.yml - Manage Azure VM lifecycle
+#
+# This playbook manages the lifecycle of Azure VMs (start, stop, restart, status).
+# It provides idempotent operations for VM state management.
+#
+# Required variables:
+#   - vm_name: Name of the VM to manage
+#   - vm_action: Action to perform (start|stop|restart|status)
+#
+# Optional variables:
+#   - resource_group: Resource group name (default: rg-{vm_name})
+#   - wait_for_completion: Wait for operation to complete (default: true)
+
+- name: Manage Azure Virtual Machine
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  
+  vars:
+    # Python interpreter configuration
+    ansible_python_interpreter: "{{ lookup('env', 'HOME') }}/.azvm-venv/bin/python"
+    resource_group: "rg-{{ vm_name }}"
+    wait_for_completion: true
+    
+  pre_tasks:
+    - name: Validate required variables
+      assert:
+        that:
+          - vm_name is defined
+          - vm_action is defined
+          - vm_action in ['start', 'stop', 'restart', 'status', 'deallocate']
+        fail_msg: "VM name and valid action (start|stop|restart|status|deallocate) are required"
+        
+    - name: Load VM configuration if exists
+      include_vars:
+        file: "{{ lookup('env', 'AZVM_CONFIG_PATH', lookup('env', 'HOME') + '/.config/azvm') }}/{{ vm_name }}.yml"
+        name: vm_config
+      failed_when: false
+      
+  tasks:
+    - name: Get VM status
+      azure.azcollection.azure_rm_virtualmachine_info:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "{{ vm_name }}"
+      register: vm_info
+      
+    - name: Display current VM status
+      debug:
+        msg: "Current VM status: {{ vm_info.vms[0].power_state if vm_info.vms else 'Not found' }}"
+      when: vm_action == 'status' or ansible_verbosity > 0
+      
+    - name: Start VM
+      azure.azcollection.azure_rm_virtualmachine:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "{{ vm_name }}"
+        started: true
+        state: present
+      when: 
+        - vm_action == 'start'
+        - vm_info.vms | length > 0
+      register: start_result
+      
+    - name: Stop VM
+      azure.azcollection.azure_rm_virtualmachine:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "{{ vm_name }}"
+        started: false
+        allocated: true
+        state: present
+      when: 
+        - vm_action == 'stop'
+        - vm_info.vms | length > 0
+      register: stop_result
+      
+    - name: Deallocate VM
+      azure.azcollection.azure_rm_virtualmachine:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "{{ vm_name }}"
+        allocated: false
+        state: present
+      when: 
+        - vm_action == 'deallocate'
+        - vm_info.vms | length > 0
+      register: deallocate_result
+      
+    - name: Restart VM
+      block:
+        - name: Stop VM for restart
+          azure.azcollection.azure_rm_virtualmachine:
+            resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+            name: "{{ vm_name }}"
+            started: false
+            state: present
+            
+        - name: Wait for VM to stop
+          pause:
+            seconds: 10
+          when: wait_for_completion
+            
+        - name: Start VM after restart
+          azure.azcollection.azure_rm_virtualmachine:
+            resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+            name: "{{ vm_name }}"
+            started: true
+            state: present
+      when: 
+        - vm_action == 'restart'
+        - vm_info.vms | length > 0
+        
+    - name: Get updated VM status
+      azure.azcollection.azure_rm_virtualmachine_info:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "{{ vm_name }}"
+      register: vm_info_updated
+      when: vm_action != 'status'
+      
+    - name: Get public IP information
+      azure.azcollection.azure_rm_publicipaddress_info:
+        resource_group: "{{ vm_config.resource_group | default(resource_group) }}"
+        name: "pip-{{ vm_name }}"
+      register: pip_info
+      failed_when: false
+      
+    - name: Display operation result
+      debug:
+        msg:
+          - "Operation: {{ vm_action }} completed"
+          - "VM Name: {{ vm_name }}"
+          - "Current Status: {{ vm_info_updated.vms[0].power_state if vm_info_updated.vms is defined else vm_info.vms[0].power_state if vm_info.vms else 'Unknown' }}"
+          - "Public IP: {{ pip_info.publicipaddresses[0].ip_address if pip_info.publicipaddresses is defined and pip_info.publicipaddresses else 'N/A' }}"
+          
+    - name: Fail if VM not found
+      fail:
+        msg: "VM '{{ vm_name }}' not found in resource group '{{ vm_config.resource_group | default(resource_group) }}'"
+      when: vm_info.vms | length == 0

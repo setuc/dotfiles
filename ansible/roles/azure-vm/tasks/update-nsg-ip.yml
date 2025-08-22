@@ -1,0 +1,75 @@
+---
+# tasks/update-nsg-ip.yml - Update NSG with current source IP
+#
+# This task file updates the Network Security Group to allow SSH access
+# from the current source IP address.
+
+- name: Detect current public IP
+  uri:
+    url: https://api.ipify.org?format=json
+    return_content: yes
+  register: current_public_ip
+  delegate_to: localhost
+
+- name: Get existing NSG rules
+  azure.azcollection.azure_rm_securitygroup_info:
+    name: "{{ nsg_name }}"
+    resource_group: "{{ azure_resource_group }}"
+  register: current_nsg_rules
+
+- name: Check if current IP is already allowed
+  set_fact:
+    ip_already_allowed: "{{ current_nsg_rules.securitygroups[0].rules | selectattr('source_address_prefix', 'equalto', current_public_ip.json.ip + '/32') | list | length > 0 }}"
+
+- name: Add current IP to NSG if not already allowed
+  block:
+    - name: Find next available priority
+      set_fact:
+        next_priority: "{{ (current_nsg_rules.securitygroups[0].rules | selectattr('priority', '<', 200) | map(attribute='priority') | list | max | default(99)) + 1 }}"
+
+    - name: Add new SSH rule for current IP
+      azure.azcollection.azure_rm_securitygroup:
+        name: "{{ nsg_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        rules: "{{ current_nsg_rules.securitygroups[0].rules + [new_ssh_rule] }}"
+      vars:
+        new_ssh_rule:
+          name: "AllowSSH_{{ current_public_ip.json.ip | replace('.', '_') }}"
+          priority: "{{ next_priority | int }}"
+          direction: Inbound
+          access: Allow
+          protocol: Tcp
+          source_address_prefix: "{{ current_public_ip.json.ip }}/32"
+          destination_address_prefix: "*"
+          source_port_range: "*"
+          destination_port_range: "22"
+          description: "SSH access from {{ current_public_ip.json.ip }} - Added {{ ansible_date_time.iso8601 }}"
+
+    - name: Display update message
+      debug:
+        msg: "Added SSH access for IP: {{ current_public_ip.json.ip }}"
+  when: not ip_already_allowed
+
+- name: Display status if IP already allowed
+  debug:
+    msg: "IP {{ current_public_ip.json.ip }} is already allowed in NSG"
+  when: ip_already_allowed
+
+- name: Clean up old SSH rules if too many
+  block:
+    - name: Count SSH rules
+      set_fact:
+        ssh_rules_count: "{{ current_nsg_rules.securitygroups[0].rules | selectattr('name', 'match', '^AllowSSH_.*') | list | length }}"
+
+    - name: Remove oldest SSH rules if more than max allowed
+      azure.azcollection.azure_rm_securitygroup:
+        name: "{{ nsg_name }}"
+        resource_group: "{{ azure_resource_group }}"
+        rules: "{{ filtered_rules }}"
+      vars:
+        filtered_rules: "{{ current_nsg_rules.securitygroups[0].rules | rejectattr('name', 'in', rules_to_remove) | list }}"
+        rules_to_remove: "{{ current_nsg_rules.securitygroups[0].rules | selectattr('name', 'match', '^AllowSSH_.*') | sort(attribute='priority') | map(attribute='name') | list[:ssh_rules_count|int - max_ssh_rules|int] }}"
+      when: ssh_rules_count | int > max_ssh_rules | int
+  when: cleanup_old_rules | default(true) | bool
+  vars:
+    max_ssh_rules: "{{ max_allowed_ssh_ips | default(10) }}"

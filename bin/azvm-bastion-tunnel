@@ -1,0 +1,404 @@
+#!/bin/bash
+#
+# azvm-bastion-tunnel - Manage Azure Bastion SSH tunnel connections
+# Provides automatic reconnection and connection monitoring
+#
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Helper functions
+error() { echo -e "${RED}ERROR:${NC} $*" >&2; }
+success() { echo -e "${GREEN}SUCCESS:${NC} $*"; }
+info() { echo -e "${BLUE}INFO:${NC} $*"; }
+warning() { echo -e "${YELLOW}WARNING:${NC} $*"; }
+
+# Default values
+LOCAL_PORT="2222"
+RESOURCE_PORT="22"
+TIMEOUT="600000"  # 10 minutes
+LOG_DIR="$HOME/.azvm/bastion-logs"
+RECONNECT_ATTEMPTS=3
+RECONNECT_DELAY=10
+CHECK_INTERVAL=30
+
+# Function to display usage
+usage() {
+    cat << EOF
+Usage: $0 [OPTIONS]
+
+Azure Bastion SSH tunnel management with automatic reconnection and monitoring.
+
+Required (one of):
+    --vm-name <name>           VM name (will auto-detect resource group)
+    --resource-id <id>         Full resource ID of the VM
+    --target-ip <ip>           Target VM private IP address
+
+Options:
+    --bastion-name <name>      Bastion host name (auto-detected if not specified)
+    --resource-group <group>   Resource group (required with --target-ip)
+    --local-port <port>        Local port to listen on (default: 2222)
+    --resource-port <port>     Target VM port (default: 22)
+    --timeout <ms>             Connection timeout in ms (default: 600000)
+    --no-reconnect            Disable automatic reconnection
+    --check-interval <sec>     Connection check interval (default: 30)
+    --debug                   Enable debug logging
+    --daemon                  Run in background as daemon
+    --help, -h                Show this help
+
+Examples:
+    # Connect to VM by name
+    $0 --vm-name my-test-vm
+
+    # Connect using resource ID
+    $0 --resource-id "/subscriptions/.../virtualMachines/my-vm"
+
+    # Connect using IP with custom ports
+    $0 --target-ip 10.0.1.4 --bastion-name MyBastion --resource-group MyRG --local-port 3322
+
+    # Run as daemon with reconnection
+    $0 --vm-name my-vm --daemon
+EOF
+}
+
+# Parse arguments
+VM_NAME=""
+RESOURCE_ID=""
+TARGET_IP=""
+BASTION_NAME=""
+RESOURCE_GROUP=""
+DEBUG=false
+DAEMON=false
+NO_RECONNECT=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --vm-name)
+            VM_NAME="$2"
+            shift 2
+            ;;
+        --resource-id)
+            RESOURCE_ID="$2"
+            shift 2
+            ;;
+        --target-ip)
+            TARGET_IP="$2"
+            shift 2
+            ;;
+        --bastion-name)
+            BASTION_NAME="$2"
+            shift 2
+            ;;
+        --resource-group)
+            RESOURCE_GROUP="$2"
+            shift 2
+            ;;
+        --local-port)
+            LOCAL_PORT="$2"
+            shift 2
+            ;;
+        --resource-port)
+            RESOURCE_PORT="$2"
+            shift 2
+            ;;
+        --timeout)
+            TIMEOUT="$2"
+            shift 2
+            ;;
+        --no-reconnect)
+            NO_RECONNECT=true
+            shift
+            ;;
+        --check-interval)
+            CHECK_INTERVAL="$2"
+            shift 2
+            ;;
+        --debug)
+            DEBUG=true
+            shift
+            ;;
+        --daemon)
+            DAEMON=true
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            error "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+# Validate arguments
+if [[ -z "$VM_NAME" && -z "$RESOURCE_ID" && -z "$TARGET_IP" ]]; then
+    error "Must specify either --vm-name, --resource-id, or --target-ip"
+    usage
+    exit 1
+fi
+
+if [[ -n "$TARGET_IP" && -z "$RESOURCE_GROUP" ]]; then
+    error "Resource group is required when using --target-ip"
+    exit 1
+fi
+
+# Create log directory
+mkdir -p "$LOG_DIR"
+
+# Auto-detect resource group and ID if VM name is provided
+if [[ -n "$VM_NAME" && -z "$RESOURCE_ID" ]]; then
+    info "Auto-detecting resource group for VM: $VM_NAME"
+    
+    # Try to find VM across all resource groups
+    VM_INFO=$(az vm list --query "[?name=='$VM_NAME'].[id,resourceGroup]" -o tsv 2>/dev/null || true)
+    
+    if [[ -z "$VM_INFO" ]]; then
+        error "VM '$VM_NAME' not found in any resource group"
+        exit 1
+    fi
+    
+    RESOURCE_ID=$(echo "$VM_INFO" | cut -f1)
+    RESOURCE_GROUP=$(echo "$VM_INFO" | cut -f2)
+    
+    info "Found VM in resource group: $RESOURCE_GROUP"
+fi
+
+# Extract resource group from resource ID if needed
+if [[ -n "$RESOURCE_ID" && -z "$RESOURCE_GROUP" ]]; then
+    RESOURCE_GROUP=$(echo "$RESOURCE_ID" | grep -oP '(?<=resourceGroups/)[^/]+')
+fi
+
+# Auto-detect Bastion if not specified
+if [[ -z "$BASTION_NAME" ]]; then
+    info "Auto-detecting Bastion host in resource group: $RESOURCE_GROUP"
+    
+    BASTION_NAME=$(az network bastion list \
+        --resource-group "$RESOURCE_GROUP" \
+        --query "[0].name" -o tsv 2>/dev/null || true)
+    
+    if [[ -z "$BASTION_NAME" ]]; then
+        # Try to find Bastion in subscription
+        info "Searching for Bastion host in subscription..."
+        BASTION_INFO=$(az network bastion list --query "[0].[name,resourceGroup]" -o tsv 2>/dev/null || true)
+        
+        if [[ -n "$BASTION_INFO" ]]; then
+            BASTION_NAME=$(echo "$BASTION_INFO" | cut -f1)
+            BASTION_RG=$(echo "$BASTION_INFO" | cut -f2)
+            warning "Using Bastion '$BASTION_NAME' from resource group '$BASTION_RG'"
+            RESOURCE_GROUP="$BASTION_RG"
+        else
+            error "No Bastion host found. Please specify --bastion-name"
+            exit 1
+        fi
+    else
+        info "Found Bastion host: $BASTION_NAME"
+    fi
+fi
+
+# Check if port is already in use
+check_port() {
+    if nc -z localhost "$LOCAL_PORT" 2>/dev/null; then
+        error "Port $LOCAL_PORT is already in use"
+        return 1
+    fi
+    return 0
+}
+
+# Function to check tunnel connection
+check_tunnel() {
+    nc -z localhost "$LOCAL_PORT" &>/dev/null
+    return $?
+}
+
+# Function to start tunnel
+start_tunnel() {
+    local log_file="$LOG_DIR/bastion-tunnel-$(date +%Y%m%d-%H%M%S).log"
+    
+    info "Starting Azure Bastion tunnel..."
+    info "Local port: $LOCAL_PORT -> Remote port: $RESOURCE_PORT"
+    
+    # Build command based on connection type
+    local cmd="az network bastion tunnel"
+    cmd+=" --name '$BASTION_NAME'"
+    cmd+=" --resource-group '$RESOURCE_GROUP'"
+    cmd+=" --resource-port '$RESOURCE_PORT'"
+    cmd+=" --port '$LOCAL_PORT'"
+    cmd+=" --timeout '$TIMEOUT'"
+    
+    if [[ -n "$RESOURCE_ID" ]]; then
+        cmd+=" --target-resource-id '$RESOURCE_ID'"
+        info "Connecting to resource: $RESOURCE_ID"
+    elif [[ -n "$TARGET_IP" ]]; then
+        cmd+=" --target-ip-address '$TARGET_IP'"
+        info "Connecting to IP: $TARGET_IP"
+    fi
+    
+    if [[ "$DEBUG" == "true" ]]; then
+        cmd+=" --debug"
+    fi
+    
+    # Start tunnel in background
+    eval "$cmd" > "$log_file" 2>&1 &
+    local pid=$!
+    
+    # Store PID for monitoring
+    echo "$pid" > "$LOG_DIR/tunnel.pid"
+    
+    # Wait for tunnel to establish
+    info "Waiting for tunnel to establish..."
+    local connected=false
+    for i in {1..30}; do
+        if check_tunnel; then
+            connected=true
+            break
+        fi
+        sleep 1
+    done
+    
+    if [[ "$connected" == "true" ]]; then
+        success "Tunnel established successfully!"
+        info "SSH command: ssh -p $LOCAL_PORT localhost"
+        info "Log file: $log_file"
+        return 0
+    else
+        error "Failed to establish tunnel"
+        kill $pid 2>/dev/null || true
+        tail -20 "$log_file"
+        return 1
+    fi
+}
+
+# Function to monitor tunnel
+monitor_tunnel() {
+    local pid_file="$LOG_DIR/tunnel.pid"
+    
+    if [[ ! -f "$pid_file" ]]; then
+        error "No tunnel PID file found"
+        return 1
+    fi
+    
+    local pid=$(cat "$pid_file")
+    local reconnect_count=0
+    
+    info "Monitoring tunnel (PID: $pid)"
+    
+    while true; do
+        # Check if process is still running
+        if ! kill -0 "$pid" 2>/dev/null; then
+            warning "Tunnel process died!"
+            
+            if [[ "$NO_RECONNECT" == "true" ]]; then
+                error "Tunnel disconnected (reconnection disabled)"
+                break
+            fi
+            
+            if [[ $reconnect_count -ge $RECONNECT_ATTEMPTS ]]; then
+                error "Max reconnection attempts reached"
+                break
+            fi
+            
+            warning "Attempting to reconnect (attempt $((reconnect_count + 1))/$RECONNECT_ATTEMPTS)..."
+            sleep "$RECONNECT_DELAY"
+            
+            if start_tunnel; then
+                pid=$(cat "$pid_file")
+                reconnect_count=0
+                success "Reconnected successfully"
+            else
+                ((reconnect_count++))
+            fi
+        elif ! check_tunnel; then
+            warning "Tunnel appears to be disconnected but process is running"
+            # Check logs for known error messages
+            local latest_log=$(ls -t "$LOG_DIR"/bastion-tunnel-*.log | head -1)
+            if grep -q "Connection to remote host was lost" "$latest_log" 2>/dev/null; then
+                warning "Connection lost detected in logs"
+                kill "$pid" 2>/dev/null || true
+            fi
+        else
+            [[ "$DEBUG" == "true" ]] && info "$(date): Tunnel is active"
+        fi
+        
+        sleep "$CHECK_INTERVAL"
+    done
+}
+
+# Function to run as daemon
+run_daemon() {
+    local daemon_log="$LOG_DIR/daemon.log"
+    
+    info "Starting Bastion tunnel daemon..."
+    
+    # Check if already running
+    if [[ -f "$LOG_DIR/daemon.pid" ]]; then
+        local daemon_pid=$(cat "$LOG_DIR/daemon.pid")
+        if kill -0 "$daemon_pid" 2>/dev/null; then
+            error "Daemon already running (PID: $daemon_pid)"
+            exit 1
+        fi
+    fi
+    
+    # Fork to background
+    {
+        echo $$ > "$LOG_DIR/daemon.pid"
+        exec >> "$daemon_log" 2>&1
+        
+        trap 'rm -f "$LOG_DIR/daemon.pid" "$LOG_DIR/tunnel.pid"; exit' EXIT INT TERM
+        
+        if start_tunnel; then
+            monitor_tunnel
+        fi
+    } &
+    
+    success "Daemon started (PID: $!)"
+    info "Log file: $daemon_log"
+}
+
+# Main execution
+main() {
+    # Check prerequisites
+    if ! command -v az &> /dev/null; then
+        error "Azure CLI not found. Please install az cli."
+        exit 1
+    fi
+    
+    # Check if logged in to Azure
+    if ! az account show &> /dev/null; then
+        error "Not logged in to Azure. Please run 'az login' first."
+        exit 1
+    fi
+    
+    # Check port availability
+    if ! check_port; then
+        exit 1
+    fi
+    
+    if [[ "$DAEMON" == "true" ]]; then
+        run_daemon
+    else
+        # Run in foreground
+        trap 'kill $(cat "$LOG_DIR/tunnel.pid" 2>/dev/null) 2>/dev/null; exit' INT TERM
+        
+        if start_tunnel; then
+            if [[ "$NO_RECONNECT" == "true" ]]; then
+                # Just wait for interrupt
+                info "Tunnel running. Press Ctrl+C to stop."
+                wait $(cat "$LOG_DIR/tunnel.pid")
+            else
+                monitor_tunnel
+            fi
+        fi
+    fi
+}
+
+# Run main function
+main

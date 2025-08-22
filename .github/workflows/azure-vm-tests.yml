@@ -1,0 +1,407 @@
+name: Azure VM Automation Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'ansible/roles/azure-vm/**'
+      - 'ansible/playbooks/azure-vm/**'
+      - 'bash/functions/azure/**'
+      - 'tests/**'
+      - '.github/workflows/azure-vm-tests.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'ansible/roles/azure-vm/**'
+      - 'ansible/playbooks/azure-vm/**'
+      - 'bash/functions/azure/**'
+      - 'tests/**'
+  schedule:
+    # Run tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Test suite to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - unit
+          - integration
+          - security
+          - e2e
+
+env:
+  PYTHON_VERSION: '3.9'
+  ANSIBLE_VERSION: '2.14.*'
+  SHELLCHECK_VERSION: 'stable'
+
+jobs:
+  static-analysis:
+    name: Static Code Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-lint yamllint
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          version: ${{ env.SHELLCHECK_VERSION }}
+          scandir: './bash'
+          severity: warning
+          check_together: 'yes'
+          disable_matcher: false
+
+      - name: Run ansible-lint
+        run: |
+          ansible-lint ansible/roles/azure-vm/
+          ansible-lint ansible/playbooks/azure-vm/
+
+      - name: Run yamllint
+        run: |
+          yamllint -c .yamllint ansible/
+
+      - name: Check bash syntax
+        run: |
+          find bash -name "*.sh" -type f -exec bash -n {} \;
+          find tests -name "*.sh" -type f -exec bash -n {} \;
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: static-analysis
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq bc
+          
+          # Install fzf for testing
+          git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
+          ~/.fzf/install --bin
+
+      - name: Add fzf to PATH
+        run: echo "$HOME/.fzf/bin" >> $GITHUB_PATH
+
+      - name: Run bash function tests
+        run: |
+          chmod +x tests/azure-vm-automation/test-bash-functions.sh
+          tests/azure-vm-automation/test-bash-functions.sh
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: /tmp/azure-vm-test-*/
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: static-analysis
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          pip install ansible-lint
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq bc
+
+      - name: Run integration tests
+        run: |
+          chmod +x tests/azure-vm-automation/test-integration.sh
+          tests/azure-vm-automation/test-integration.sh
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: /tmp/azure-vm-integration-test-*/
+
+  security-tests:
+    name: Security Tests
+    runs-on: ubuntu-latest
+    needs: static-analysis
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install security test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq bc curl
+
+      - name: Make mock Azure CLI executable
+        run: chmod +x tests/azure-vm-automation/mock-azure-cli.sh
+
+      - name: Run NSG security tests
+        run: |
+          chmod +x tests/security/test-nsg-rules.sh
+          tests/security/test-nsg-rules.sh
+
+      - name: Run IP restriction tests
+        run: |
+          chmod +x tests/security/test-ip-restriction.sh
+          tests/security/test-ip-restriction.sh
+
+      - name: Run SSH security tests
+        run: |
+          chmod +x tests/security/test-ssh-access.sh
+          tests/security/test-ssh-access.sh
+
+      - name: Upload security test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-test-results
+          path: |
+            /tmp/nsg-security-report-*.txt
+            /tmp/ip-restriction-report-*.txt
+            /tmp/ssh-security-report-*.txt
+
+      - name: Security scan with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  e2e-tests:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, security-tests]
+    if: github.event_name == 'schedule' || github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == 'e2e'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          sudo apt-get update
+          sudo apt-get install -y jq bc curl
+
+      - name: Make test scripts executable
+        run: |
+          chmod +x tests/azure-vm-automation/mock-azure-cli.sh
+          chmod +x tests/e2e/*.sh
+
+      - name: Run VM creation E2E test
+        run: tests/e2e/test-vm-create.sh
+
+      - name: Run VM lifecycle E2E test
+        run: tests/e2e/test-vm-lifecycle.sh
+
+      - name: Run security compliance E2E test
+        run: tests/e2e/test-security-compliance.sh
+
+      - name: Upload E2E test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: |
+            /tmp/e2e-*/
+            /tmp/e2e-*/**/*.txt
+            /tmp/e2e-*/**/*.html
+
+  molecule-tests:
+    name: Molecule Tests
+    runs-on: ubuntu-latest
+    needs: static-analysis
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Molecule and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          pip install molecule[docker] ansible-lint yamllint
+
+      - name: Run Molecule tests
+        run: |
+          cd ansible/roles/azure-vm
+          molecule test
+        env:
+          PY_COLORS: '1'
+          ANSIBLE_FORCE_COLOR: '1'
+
+      - name: Upload Molecule test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: molecule-test-results
+          path: ansible/roles/azure-vm/molecule/default/
+
+  performance-benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install benchmark dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y time bc jq
+
+      - name: Run performance benchmarks
+        run: |
+          # Create benchmark script
+          cat > benchmark.sh << 'EOF'
+          #!/bin/bash
+          echo "Running performance benchmarks..."
+          
+          # Benchmark function loading time
+          start_time=$(date +%s.%N)
+          source bash/functions/azure/vm-automation.sh 2>/dev/null
+          end_time=$(date +%s.%N)
+          load_time=$(echo "$end_time - $start_time" | bc)
+          echo "Function load time: ${load_time}s"
+          
+          # Save results
+          mkdir -p benchmark-results
+          echo "{\"load_time\": $load_time, \"date\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > benchmark-results/results.json
+          EOF
+          
+          chmod +x benchmark.sh
+          ./benchmark.sh
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark-results/
+
+      - name: Comment PR with benchmark results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const results = JSON.parse(fs.readFileSync('benchmark-results/results.json', 'utf8'));
+            
+            const comment = `## Performance Benchmark Results
+            
+            - **Function Load Time**: ${results.load_time}s
+            - **Date**: ${results.date}
+            
+            ✅ All performance benchmarks completed successfully.`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, security-tests, molecule-tests]
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate test summary
+        run: |
+          echo "# Test Summary Report" > summary.md
+          echo "" >> summary.md
+          echo "## Test Results" >> summary.md
+          echo "" >> summary.md
+          
+          # Check job statuses
+          echo "| Test Suite | Status |" >> summary.md
+          echo "|------------|--------|" >> summary.md
+          echo "| Static Analysis | ${{ needs.static-analysis.result }} |" >> summary.md
+          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> summary.md
+          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> summary.md
+          echo "| Security Tests | ${{ needs.security-tests.result }} |" >> summary.md
+          echo "| Molecule Tests | ${{ needs.molecule-tests.result }} |" >> summary.md
+          
+          echo "" >> summary.md
+          echo "## Artifacts" >> summary.md
+          echo "" >> summary.md
+          echo "The following test artifacts have been generated:" >> summary.md
+          echo "- Unit test results" >> summary.md
+          echo "- Integration test results" >> summary.md
+          echo "- Security test reports" >> summary.md
+          echo "- Molecule test results" >> summary.md
+          
+          cat summary.md
+
+      - name: Upload test summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-summary
+          path: summary.md
+
+      - name: Fail if any tests failed
+        if: |
+          needs.static-analysis.result != 'success' ||
+          needs.unit-tests.result != 'success' ||
+          needs.integration-tests.result != 'success' ||
+          needs.security-tests.result != 'success' ||
+          needs.molecule-tests.result != 'success'
+        run: |
+          echo "One or more test suites failed. Please check the results above."
+          exit 1

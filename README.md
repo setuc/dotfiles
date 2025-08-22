@@ -69,6 +69,7 @@ You can browse other fonts at <https://www.nerdfonts.com/>.
 
 - A `.pre-commit-config.yaml` is included to run `black`, `ruff` and `shellcheck`. Install [pre‑commit](https://pre-commit.com/) and run `pre-commit install` to enable automatic checks.
 - Oh My Posh is installed into `~/bin` and initialised from `.bashrc` using the theme in `oh-my-posh/themes/night-owl.omp.json`.
+- The playbook ensures the `unzip` package is present before installing Oh My Posh.
 
 The `wd` alias defaults to the Azure ML working directory but respects the `AML_CODE_DIR` environment variable so you can override it as needed.
 

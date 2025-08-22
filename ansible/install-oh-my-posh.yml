@@ -2,6 +2,12 @@
 - hosts: localhost
   gather_facts: false
   tasks:
+    - name: Ensure unzip is installed
+      become: true
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+
     - name: Download oh-my-posh install script
       ansible.builtin.get_url:
         url: https://ohmyposh.dev/install.sh

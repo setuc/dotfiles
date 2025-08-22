@@ -1,0 +1,123 @@
+---
+# tasks/prerequisites.yml - Setup Azure prerequisites
+#
+# This task file ensures all Azure prerequisites are met including
+# resource providers, features, and permissions.
+
+- name: Register required Azure resource providers
+  command: az provider register --namespace {{ item }}
+  loop:
+    - Microsoft.Compute
+    - Microsoft.Network
+    - Microsoft.Storage
+    - Microsoft.KeyVault
+    - Microsoft.ManagedIdentity
+    - Microsoft.Security
+    - Microsoft.OperationalInsights
+    - Microsoft.Insights
+  register: provider_registration
+  changed_when: "'Registering' in provider_registration.stdout"
+
+- name: Wait for providers to be registered
+  command: az provider show --namespace {{ item }} --query "registrationState" -o tsv
+  loop:
+    - Microsoft.Compute
+    - Microsoft.Network
+    - Microsoft.Storage
+  register: provider_status
+  until: provider_status.stdout == "Registered"
+  retries: 30
+  delay: 10
+
+- name: Check Azure subscription quota
+  command: >
+    az vm list-usage
+    --location {{ azure_region }}
+    --query "[?name.value=='cores'].{Current:currentValue,Limit:limit}" -o json
+  register: quota_check
+  changed_when: false
+
+- name: Validate sufficient quota
+  assert:
+    that:
+      - (quota_check.stdout | from_json)[0].Current | int + vm_cores | default(2) | int <= (quota_check.stdout | from_json)[0].Limit | int
+    fail_msg: "Insufficient CPU quota in {{ azure_region }}. Current: {{ (quota_check.stdout | from_json)[0].Current }}, Limit: {{ (quota_check.stdout | from_json)[0].Limit }}"
+  when: check_quota | default(true) | bool
+
+- name: Create or verify storage account for diagnostics
+  azure.azcollection.azure_rm_storageaccount:
+    name: "{{ diagnostics_storage_account | default((azure_resource_group + 'diag') | lower | regex_replace('[^a-z0-9]', '') | truncate(24, True, '') ) }}"
+    resource_group: "{{ azure_resource_group }}"
+    location: "{{ azure_region }}"
+    account_type: Standard_LRS
+    kind: StorageV2
+    tags: "{{ resource_tags }}"
+  when: enable_boot_diagnostics | default(true) | bool
+
+- name: Check for existing Key Vault
+  command: >
+    az keyvault list
+    --resource-group {{ azure_resource_group }}
+    --query "[?name=='{{ key_vault_name | default(azure_resource_group + '-kv') }}'].name" -o tsv
+  register: kv_check
+  failed_when: false
+  when: use_key_vault | default(false) | bool
+
+- name: Create Key Vault if needed
+  command: >
+    az keyvault create
+    --name {{ key_vault_name | default(azure_resource_group + '-kv') }}
+    --resource-group {{ azure_resource_group }}
+    --location {{ azure_region }}
+    --enabled-for-deployment true
+    --enabled-for-disk-encryption true
+    --enabled-for-template-deployment true
+  when: 
+    - use_key_vault | default(false) | bool
+    - kv_check.stdout == ""
+
+- name: Enable Azure Security Center free tier
+  command: >
+    az security pricing create
+    --name VirtualMachines
+    --tier free
+  when: enable_security_center | default(true) | bool
+  failed_when: false
+
+- name: Create Log Analytics workspace if monitoring enabled
+  command: >
+    az monitor log-analytics workspace create
+    --resource-group {{ azure_resource_group }}
+    --workspace-name {{ log_analytics_workspace_name | default(azure_resource_group + '-law') }}
+    --location {{ azure_region }}
+  when: 
+    - enable_monitoring | default(false) | bool
+    - log_analytics_workspace_name is not defined or log_analytics_workspace_name == ""
+  register: law_creation
+
+- name: Get Log Analytics workspace details
+  command: >
+    az monitor log-analytics workspace show
+    --resource-group {{ azure_resource_group }}
+    --workspace-name {{ log_analytics_workspace_name | default(azure_resource_group + '-law') }}
+    --query "{id:id,key:primarySharedKey}" -o json
+  when: enable_monitoring | default(false) | bool
+  register: law_details
+
+- name: Set Log Analytics facts
+  set_fact:
+    log_analytics_workspace_id: "{{ (law_details.stdout | from_json).id }}"
+    log_analytics_workspace_key: "{{ (law_details.stdout | from_json).key }}"
+  when: 
+    - enable_monitoring | default(false) | bool
+    - law_details is succeeded
+
+- name: Display prerequisites summary
+  debug:
+    msg:
+      - "Prerequisites Setup Complete"
+      - "Resource Providers: Registered"
+      - "CPU Quota Available: Yes"
+      - "Diagnostics Storage: {{ diagnostics_storage_account | default((azure_resource_group + 'diag') | lower | regex_replace('[^a-z0-9]', '') | truncate(24, True, '') ) }}"
+      - "Key Vault: {{ 'Created' if use_key_vault | default(false) | bool else 'Not configured' }}"
+      - "Log Analytics: {{ 'Configured' if enable_monitoring | default(false) | bool else 'Not configured' }}"

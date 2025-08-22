@@ -1,0 +1,150 @@
+---
+# tasks/backup.yml - Configure VM backup
+#
+# This task file sets up Azure Backup for the VM including vault creation,
+# policy configuration, and backup scheduling.
+
+- name: Check if Recovery Services Vault exists
+  command: >
+    az backup vault show
+    --name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+    --resource-group {{ azure_resource_group }}
+  register: vault_check
+  failed_when: false
+  changed_when: false
+
+- name: Create Recovery Services Vault
+  command: >
+    az backup vault create
+    --name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+    --resource-group {{ azure_resource_group }}
+    --location {{ azure_region }}
+  when: vault_check.rc != 0
+
+- name: Set vault storage redundancy
+  command: >
+    az backup vault backup-properties set
+    --name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+    --resource-group {{ azure_resource_group }}
+    --backup-storage-redundancy {{ backup_storage_redundancy | default('LocallyRedundant') }}
+  when: vault_check.rc != 0
+
+- name: Get default backup policy
+  command: >
+    az backup policy show
+    --vault-name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+    --resource-group {{ azure_resource_group }}
+    --name {{ backup_policy_name | default('DefaultPolicy') }}
+  register: policy_check
+  failed_when: false
+  changed_when: false
+
+- name: Create custom backup policy if needed
+  command: >
+    az backup policy create
+    --vault-name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+    --resource-group {{ azure_resource_group }}
+    --name {{ backup_policy_name }}
+    --backup-management-type AzureIaasVM
+    --policy '{{ custom_backup_policy | to_json }}'
+  when: 
+    - custom_backup_policy is defined
+    - policy_check.rc != 0
+
+- name: Enable VM backup protection
+  command: >
+    az backup protection enable-for-vm
+    --vault-name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+    --resource-group {{ azure_resource_group }}
+    --vm {{ vm_name }}
+    --policy-name {{ backup_policy_name | default('DefaultPolicy') }}
+  register: backup_enable
+  failed_when: backup_enable.rc != 0 and 'already protected' not in backup_enable.stderr
+
+- name: Trigger initial backup
+  command: >
+    az backup protection backup-now
+    --vault-name {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+    --resource-group {{ azure_resource_group }}
+    --container-name {{ 'iaasvmcontainer;iaasvmcontainerv2;' + azure_resource_group + ';' + vm_name }}
+    --item-name {{ 'vm;iaasvmcontainerv2;' + azure_resource_group + ';' + vm_name }}
+    --retain-until {{ (ansible_date_time.date | to_datetime('%Y-%m-%d') + 30|days).strftime('%d-%m-%Y') }}
+  when: trigger_initial_backup | default(false) | bool
+
+- name: Configure backup alerts
+  command: >
+    az monitor metrics alert create
+    --name {{ vm_name }}-backup-failure
+    --resource-group {{ azure_resource_group }}
+    --scopes "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ azure_resource_group }}/providers/Microsoft.RecoveryServices/vaults/{{ backup_vault_name | default(azure_resource_group + '-vault') }}"
+    --condition "count BackupHealthEvent where EventType == 'BackupFailed' > 0"
+    --window-size 24h
+    --evaluation-frequency 1h
+    --severity 1
+    --description "Alert on backup failures for {{ vm_name }}"
+  when: enable_backup_alerts | default(true) | bool
+
+- name: Set backup retention policy
+  set_fact:
+    retention_settings:
+      daily: "{{ backup_retention_daily | default(7) }}"
+      weekly: "{{ backup_retention_weekly | default(4) }}"
+      monthly: "{{ backup_retention_monthly | default(12) }}"
+      yearly: "{{ backup_retention_yearly | default(1) }}"
+
+- name: Configure file-level recovery preparation
+  block:
+    - name: Install required packages for file recovery
+      package:
+        name:
+          - cifs-utils
+          - nfs-common
+        state: present
+      delegate_to: "{{ vm_name }}"
+      become: yes
+
+    - name: Create recovery mount point
+      file:
+        path: /mnt/azure-recovery
+        state: directory
+        mode: '0755'
+      delegate_to: "{{ vm_name }}"
+      become: yes
+  when: prepare_file_recovery | default(true) | bool
+
+- name: Document backup configuration
+  copy:
+    content: |
+      Azure Backup Configuration for {{ vm_name }}
+      ==========================================
+      
+      Vault Name: {{ backup_vault_name | default(azure_resource_group + '-vault') }}
+      Resource Group: {{ azure_resource_group }}
+      Backup Policy: {{ backup_policy_name | default('DefaultPolicy') }}
+      
+      Retention Settings:
+      - Daily Backups: {{ retention_settings.daily }} days
+      - Weekly Backups: {{ retention_settings.weekly }} weeks
+      - Monthly Backups: {{ retention_settings.monthly }} months
+      - Yearly Backups: {{ retention_settings.yearly }} years
+      
+      Recovery Instructions:
+      1. For full VM restore: Use Azure Portal or CLI
+      2. For file-level recovery: Use Azure Backup File Recovery
+      3. Mount point prepared at: /mnt/azure-recovery
+      
+      Backup Status Check:
+      az backup job list --vault-name {{ backup_vault_name | default(azure_resource_group + '-vault') }} \
+        --resource-group {{ azure_resource_group }} \
+        --backup-management-type AzureIaasVM
+    dest: "/tmp/{{ vm_name }}_backup_config.txt"
+  delegate_to: localhost
+
+- name: Display backup configuration summary
+  debug:
+    msg:
+      - "Backup Configuration Complete"
+      - "Vault: {{ backup_vault_name | default(azure_resource_group + '-vault') }}"
+      - "Policy: {{ backup_policy_name | default('DefaultPolicy') }}"
+      - "Initial Backup: {{ 'Triggered' if trigger_initial_backup | default(false) | bool else 'Manual trigger required' }}"
+      - "Backup Alerts: {{ 'Configured' if enable_backup_alerts | default(true) | bool else 'Not configured' }}"

@@ -1,0 +1,7 @@
+---
+# tasks/configure-vm.yml - Wrapper for VM configuration
+#
+# This file includes the main configure.yml task file for post-creation configuration
+
+- name: Include VM configuration tasks
+  include_tasks: configure.yml

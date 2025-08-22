@@ -1,0 +1,160 @@
+---
+# Example playbook for Azure VM automation with security-first approach
+# 
+# This playbook demonstrates various operations using the azure-vm role
+
+- name: Create secure Azure VM
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    # Required variables
+    azure_resource_group: "myapp-rg"
+    vm_name: "myapp-vm01"
+    azure_region: "eastus"
+    
+    # VM configuration
+    vm_size: "Standard_B2s"
+    vm_admin_username: "azureuser"
+    
+    # Security settings (defaults are secure)
+    # allowed_ssh_sources: []  # Auto-detected from SSH connection
+    detect_controller_ip: true
+    harden_ssh: true
+    configure_host_firewall: true
+    enable_fail2ban: true
+    
+    # Optional features
+    enable_monitoring: true
+    enable_backup: true
+    auto_shutdown_enabled: true
+    auto_shutdown_time: "19:00"
+    
+    # Cost management tags
+    resource_tags:
+      Environment: "Development"
+      Project: "MyApp"
+      Owner: "{{ lookup('env', 'USER') }}"
+      CostCenter: "Engineering"
+
+  tasks:
+    # Create a new VM
+    - name: Create Azure VM with security
+      include_role:
+        name: azure-vm
+      vars:
+        azure_vm_operation: "create"
+
+    # Example: Start a stopped VM
+    - name: Start VM
+      include_role:
+        name: azure-vm
+      vars:
+        vm_operation: "start"
+      tags: ['never', 'start']
+
+    # Example: Stop VM (keeps allocated)
+    - name: Stop VM
+      include_role:
+        name: azure-vm
+      vars:
+        vm_operation: "stop"
+      tags: ['never', 'stop']
+
+    # Example: Deallocate VM (stops billing)
+    - name: Deallocate VM
+      include_role:
+        name: azure-vm
+      vars:
+        vm_operation: "deallocate"
+      tags: ['never', 'deallocate']
+
+    # Example: Update NSG with current IP
+    - name: Update allowed IP
+      include_role:
+        name: azure-vm
+      vars:
+        vm_operation: "update-ip"
+      tags: ['never', 'update-ip']
+
+    # Example: Request JIT access
+    - name: Request JIT access
+      include_role:
+        name: azure-vm
+      vars:
+        vm_operation: "jit-request"
+        jit_duration_hours: 3
+      tags: ['never', 'jit']
+
+    # Example: Check VM status
+    - name: Check VM status
+      include_role:
+        name: azure-vm
+      vars:
+        vm_operation: "status"
+      tags: ['never', 'status']
+
+    # Example: Resize VM
+    - name: Resize VM
+      include_role:
+        name: azure-vm
+      vars:
+        vm_operation: "resize"
+        new_vm_size: "Standard_B4ms"
+      tags: ['never', 'resize']
+
+    # Example: Install Docker
+    - name: Install Docker on VM
+      include_role:
+        name: azure-vm
+      vars:
+        docker_install: true
+      tags: ['never', 'docker']
+
+    # Example: Install web server
+    - name: Install web server
+      include_role:
+        name: azure-vm
+      vars:
+        webserver_install: true
+        webserver_type: "nginx"
+        enable_ssl: true
+      tags: ['never', 'webserver']
+
+    # Example: Configure monitoring
+    - name: Configure monitoring
+      include_role:
+        name: azure-vm
+      vars:
+        azure_vm_operation: "configure"
+        enable_monitoring: true
+        enable_vm_insights: true
+      tags: ['never', 'monitoring']
+
+    # Example: Cleanup VM
+    - name: Delete VM and resources
+      include_role:
+        name: azure-vm
+      vars:
+        azure_vm_operation: "cleanup"
+        delete_vm: true
+        delete_network_resources: true
+        delete_disks: true
+        delete_backup_data: false
+      tags: ['never', 'cleanup']
+
+# Example: Running specific operations
+# 
+# Create VM:
+#   ansible-playbook azure-vm-example.yml
+#
+# Start VM:
+#   ansible-playbook azure-vm-example.yml --tags start
+#
+# Stop VM:
+#   ansible-playbook azure-vm-example.yml --tags stop
+#
+# Update IP access:
+#   ansible-playbook azure-vm-example.yml --tags update-ip
+#
+# Delete VM:
+#   ansible-playbook azure-vm-example.yml --tags cleanup

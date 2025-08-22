@@ -1,0 +1,148 @@
+---
+# tasks/monitoring.yml - Configure VM monitoring
+#
+# This task file sets up comprehensive monitoring for the Azure VM including
+# metrics, logs, alerts, and dashboards.
+
+- name: Install Azure Monitor agent
+  command: >
+    az vm extension set
+    --resource-group {{ azure_resource_group }}
+    --vm-name {{ vm_name }}
+    --name AzureMonitorLinuxAgent
+    --publisher Microsoft.Azure.Monitor
+    --version 1.0
+    --settings '{"workspaceId": "{{ log_analytics_workspace_id }}"}'
+    --protected-settings '{"workspaceKey": "{{ log_analytics_workspace_key }}"}'
+  when: 
+    - log_analytics_workspace_id is defined
+    - log_analytics_workspace_key is defined
+
+- name: Configure diagnostic settings
+  command: >
+    az monitor diagnostic-settings create
+    --name {{ vm_name }}-diagnostics
+    --resource "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ azure_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ vm_name }}"
+    --workspace {{ log_analytics_workspace_id }}
+    --metrics '[{"category": "AllMetrics", "enabled": true}]'
+    --logs '[{"category": "Administrative", "enabled": true}, {"category": "Security", "enabled": true}, {"category": "ServiceHealth", "enabled": true}]'
+  when: log_analytics_workspace_id is defined
+
+- name: Create CPU alert rule
+  command: >
+    az monitor metrics alert create
+    --name {{ vm_name }}-high-cpu
+    --resource-group {{ azure_resource_group }}
+    --scopes "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ azure_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ vm_name }}"
+    --condition "avg Percentage CPU > {{ cpu_alert_threshold | default(80) }}"
+    --window-size 5m
+    --evaluation-frequency 1m
+    --severity 2
+    --description "Alert when CPU usage exceeds {{ cpu_alert_threshold | default(80) }}%"
+  when: enable_alerts | default(true) | bool
+
+- name: Create memory alert rule
+  command: >
+    az monitor metrics alert create
+    --name {{ vm_name }}-high-memory
+    --resource-group {{ azure_resource_group }}
+    --scopes "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ azure_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ vm_name }}"
+    --condition "avg Available Memory Bytes < {{ memory_alert_threshold_gb | default(1) * 1073741824 }}"
+    --window-size 5m
+    --evaluation-frequency 1m
+    --severity 2
+    --description "Alert when available memory is less than {{ memory_alert_threshold_gb | default(1) }}GB"
+  when: enable_alerts | default(true) | bool
+
+- name: Create disk space alert rule
+  command: >
+    az monitor metrics alert create
+    --name {{ vm_name }}-low-disk
+    --resource-group {{ azure_resource_group }}
+    --scopes "/subscriptions/{{ azure_subscription_id }}/resourceGroups/{{ azure_resource_group }}/providers/Microsoft.Compute/virtualMachines/{{ vm_name }}"
+    --condition "avg Disk Free Space < {{ disk_alert_threshold_gb | default(5) * 1073741824 }}"
+    --window-size 5m
+    --evaluation-frequency 1m
+    --severity 2
+    --description "Alert when free disk space is less than {{ disk_alert_threshold_gb | default(5) }}GB"
+  when: enable_alerts | default(true) | bool
+
+- name: Configure log collection
+  blockinfile:
+    path: /etc/rsyslog.d/50-default.conf
+    block: |
+      # Send logs to Azure Log Analytics
+      *.* @@{{ log_analytics_workspace_id }}.ods.opinsights.azure.com:25224
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Azure Logging"
+  delegate_to: "{{ vm_name }}"
+  become: yes
+  notify: restart rsyslog
+  when: configure_syslog | default(false) | bool
+
+- name: Install and configure Telegraf for custom metrics
+  block:
+    - name: Download Telegraf
+      get_url:
+        url: https://dl.influxdata.com/telegraf/releases/telegraf_1.24.0-1_amd64.deb
+        dest: /tmp/telegraf.deb
+      delegate_to: "{{ vm_name }}"
+
+    - name: Install Telegraf
+      apt:
+        deb: /tmp/telegraf.deb
+        state: present
+      delegate_to: "{{ vm_name }}"
+      become: yes
+
+    - name: Configure Telegraf for Azure Monitor
+      template:
+        src: telegraf.conf.j2
+        dest: /etc/telegraf/telegraf.conf
+      delegate_to: "{{ vm_name }}"
+      become: yes
+      notify: restart telegraf
+  when: install_telegraf | default(false) | bool
+
+- name: Create action group for alerts
+  command: >
+    az monitor action-group create
+    --name {{ vm_name }}-alerts
+    --resource-group {{ azure_resource_group }}
+    --short-name {{ vm_name[:12] }}
+    --email-receiver admin-email --email-address {{ alert_email | default(owner_email | default(lookup('env', 'USER') + '@company.com')) }}
+  when: 
+    - enable_alerts | default(true) | bool
+    - create_action_group | default(true) | bool
+
+- name: Enable VM insights
+  command: >
+    az vm insight enable
+    --resource-group {{ azure_resource_group }}
+    --name {{ vm_name }}
+    --workspace {{ log_analytics_workspace_id }}
+  when: enable_vm_insights | default(true) | bool
+
+- name: Configure custom dashboard
+  copy:
+    content: "{{ lookup('template', 'dashboard.json.j2') }}"
+    dest: "/tmp/{{ vm_name }}-dashboard.json"
+  delegate_to: localhost
+  when: create_dashboard | default(false) | bool
+
+- name: Create Azure dashboard
+  command: >
+    az portal dashboard create
+    --name {{ vm_name }}-dashboard
+    --resource-group {{ azure_resource_group }}
+    --input-path /tmp/{{ vm_name }}-dashboard.json
+  when: create_dashboard | default(false) | bool
+
+- name: Display monitoring configuration summary
+  debug:
+    msg:
+      - "Monitoring Configuration Complete"
+      - "Azure Monitor Agent: Installed"
+      - "Log Analytics Workspace: {{ log_analytics_workspace_name | default(azure_resource_group + '-law') }}"
+      - "Alerts Configured: CPU, Memory, Disk"
+      - "VM Insights: {{ 'Enabled' if enable_vm_insights | default(true) | bool else 'Disabled' }}"
+      - "Alert Email: {{ alert_email | default(owner_email | default(lookup('env', 'USER') + '@company.com')) }}"
