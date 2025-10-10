@@ -16,9 +16,9 @@ on:
       - 'ansible/playbooks/azure-vm/**'
       - 'bash/functions/azure/**'
       - 'tests/**'
-  schedule:
-    # Run tests daily at 2 AM UTC
-    - cron: '0 2 * * *'
+  # schedule:
+  #   # Run tests daily at 2 AM UTC
+  #   - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       test_suite:
