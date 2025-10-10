@@ -3,8 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
-  schedule:
-    - cron: '0 0 1-7 * 1'  # Run on the first Monday of every month at 00:00 UTC
+  # schedule:
+  #   - cron: '0 0 1-7 * 1'  # Run on the first Monday of every month at 00:00 UTC
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
